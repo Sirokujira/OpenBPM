@@ -1,4 +1,5 @@
-olve.cu (CUDA)
+/*
+solve.cu (CUDA)
 */
 
 #include "obpm.h"
