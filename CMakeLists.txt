@@ -9,9 +9,11 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 find_package(Threads REQUIRED)
 
+find_package (Eigen3 3.3 REQUIRED)
+
 # CUDA を使用するかどうかを設定するオプションを追加
-option(USE_CUDA "Enable CUDA support" OFF)
-if(USE_CUDA)
+option(WITH_CUDA "Enable CUDA support" OFF)
+if(WITH_CUDA)
     #set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
     message(STATUS ${CMAKE_CUDA_COMPILER})
     message(STATUS ${CMAKE_CUDA_HOST_COMPILER})
@@ -29,9 +31,9 @@ endif()
 
 
 # MPI を使用するかどうかを設定するオプションを追加
-option(USE_MPI "Enable MPI support" OFF)
+option(WITH_MPI "Enable MPI support" OFF)
 # オプションに基づいて _MPI を定義
-if(USE_MPI)
+if(WITH_MPI)
     #before : -D_MPI
     find_package(MPI REQUIRED C)
     #+cuda
@@ -62,11 +64,13 @@ set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
 find_package(OpenMP REQUIRED)
 # Find MPI package
 
-if(USE_MPI)
+if(WITH_MPI)
     file(GLOB MPI_SOURCES "mpi/*.c")
 else()
     file(GLOB SOURCES "sol/*.c")
 endif()
+
+file(GLOB BPM_SOURCES "bpm/*.cpp")
 
 # HDF5パッケージの検索
 
@@ -90,7 +94,7 @@ if (HDF5_FOUND)
     # If HDF5 is build with parallel support it requires MPI, which needs
     # to be enabled
     if (HDF5_IS_PARALLEL)
-      if (USE_MPI)
+      if (WITH_MPI)
       #  set(OP2_HDF5_INCLUDE_DIRS ${OP2_HDF5_INCLUDE_DIRS} ${MPI_INCLUDE_PATH})
       #  set(OP2_HDF5_LIBRARIES ${OP2_HDF5_LIBRARIES} ${MPI_LIBRARIES})
       #  # MPI is always built with HDF5 if available
@@ -107,7 +111,7 @@ if (HDF5_FOUND)
 endif()
 
 # CUDA が見つかった場合のみターゲットをビルド
-if (USE_CUDA)
+if (WITH_CUDA)
     #if (CUDA_FOUND)
     if (CUDAToolkit_FOUND)
         #CC : nvcc
@@ -167,7 +171,7 @@ if (USE_CUDA)
         set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -gencode arch=compute_60,code=sm_60")
 
         # Add CUDA executable
-        if (USE_MPI)
+        if (WITH_MPI)
             # Add CUDA source files(reject solve.cu)
             #file(GLOB CUDA_SOURCES "cuda/*.cu")
             set(CUDA_SOURCES2
@@ -318,7 +322,7 @@ if (USE_CUDA)
         message(WARNING "CUDA が見つかりませんでした。CUDA サポートは無効です。")
     endif()
 else()
-    if(USE_MPI)
+    if(WITH_MPI)
         #solve.c reject
         set(SOURCES3
             ${CMAKE_SOURCE_DIR}/sol/average.c
@@ -398,7 +402,7 @@ else()
         target_link_libraries(obpm_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads m)
         target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C hdf5::hdf5)
     else ()
-        add_executable(obpm ${SOURCES} src/sol_Main.c)
+        add_executable(obpm ${SOURCES} src/sol_Main.cpp)
         #target_link_libraries(obpm glfw)
         #target_link_libraries(obpm OpenGL::GL)
 
@@ -409,7 +413,7 @@ else()
         # Link OpenMP libraries to the target
         if(OpenMP_C_FOUND)
             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m)
-            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
+            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m hdf5::hdf5 Eigen3::Eigen)
             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_CXX m)
         else()
             #target_link_libraries(obpm PRIVATE m)
@@ -423,8 +427,8 @@ else()
     endif()
 endif()
 
-option(USE_POST "Enable Prepost Tool" ON)
-if (USE_POST)
+option(WITH_POST "Enable Prepost Tool" ON)
+if (WITH_POST)
     file(GLOB POST_SOURCES "post/*.c")
     set(SOURCES3
         ${CMAKE_SOURCE_DIR}/sol/nearfield_c.c
@@ -445,8 +449,8 @@ if (USE_POST)
 endif()
 
 #custom viewer
-#option(USE_HMI "Enable HMI Tool" ON)
-#if (USE_HMI)
+#option(WITH_HMI "Enable HMI Tool" ON)
+#if (WITH_HMI)
 #    file(GLOB HMI_SOURCES "hmi/*.c")
 #    set(SOURCES4
 #        ${CMAKE_SOURCE_DIR}/sol/nearfield_c.c
@@ -465,4 +469,3 @@ endif()
 #    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
 #
 #endif()
-

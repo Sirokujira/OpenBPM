@@ -1,0 +1,11 @@
+--- cuda/reduction_sum.cu
++++ cuda/reduction_sum.cu
+@@ -6,6 +6,8 @@ n   : array size (<=1024)
+ s   : array (shared memory)
+ sum : sum (output)
+ */
++//#include "obpm.h"
++
+ __device__
+ void reduction_sum(int tid, int n, real_t *s, real_t *sum)
+ {
