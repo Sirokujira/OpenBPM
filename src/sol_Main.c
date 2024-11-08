@@ -100,7 +100,8 @@ int main(int argc, char *argv[])
 	double tdft = 0;
 
 	// solve
-	solve(io, &tdft, fp_log);
+	//solve(io, &tdft, fp_log);
+	solve_bpm(io, &tdft, fp_log);
 
 	// cpu time
 	cpu[3] = cputime();

@@ -32,7 +32,7 @@ static void setup_timestep(void)
 		dzmin = MIN(dzmin, fabs(Zn[k + 1] - Zn[k]));
 	}
 
-	Dt = 1 / sqrt(1 / (dxmin * dxmin) + 1 / (dymin * dymin) + 1 / (dzmin * dzmin)) / C;
+	Dt = 1 / sqrt(1 / (dxmin * dxmin) + 1 / (dymin * dymin) + 1 / (dzmin * dzmin)) / SPEED_OF_LIGHT;
 	//printf("%e %e %e %e\n", dxmin, dymin, dzmin, Dt);
 }
 
@@ -73,7 +73,7 @@ static void setup_material(void)
 
 	for (int m = 2; m < NMaterial; m++) {
 		if      (Material[m].type == 1) {
-			const double denom = Material[m].epsr + (Material[m].esgm * ETA0 * C * Dt);
+			const double denom = Material[m].epsr + (Material[m].esgm * ETA0 * SPEED_OF_LIGHT * Dt);
 			C1[m] = (real_t)(Material[m].epsr / denom);
 			C2[m] = (real_t)(1 / denom);
 		}
@@ -91,7 +91,7 @@ static void setup_material(void)
 	}
 
 	for (int m = 2; m < NMaterial; m++) {
-		const double denom = Material[m].amur + (Material[m].msgm / ETA0 * C * Dt);
+		const double denom = Material[m].amur + (Material[m].msgm / ETA0 * SPEED_OF_LIGHT * Dt);
 		D1[m] = (real_t)(Material[m].amur / denom);
 		D2[m] = (real_t)(1 / denom);
 	}
@@ -107,7 +107,7 @@ static void setup_material(void)
 // mesh factor : c * dt / d
 static void setup_mesh(void)
 {
-	double cdt = C * Dt;
+	double cdt = SPEED_OF_LIGHT * Dt;
 
 	for (int i = 1; i < Nx; i++) {
 		RXn[i] = (real_t)(cdt / ((Xn[i + 1] - Xn[i - 1]) / 2));
@@ -165,7 +165,7 @@ static void setup_mesh(void)
 double factorMur(double d, id_t m)
 {
 	if (m != PEC) {
-		const double vdt = (C * Dt) / sqrt(Material[m].epsr * Material[m].amur);
+		const double vdt = (SPEED_OF_LIGHT * Dt) / sqrt(Material[m].epsr * Material[m].amur);
 		return (vdt - d) / (vdt + d);
 	}
 	else {

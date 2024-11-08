@@ -12,7 +12,7 @@ void farfield(int ifreq, double theta, double phi, double ffctr, d_complex_t *et
 {
 	// wave number
 
-	const double kwave = (2 * PI * Freq2[ifreq]) / C;
+	const double kwave = (2 * PI * Freq2[ifreq]) / SPEED_OF_LIGHT;
 
 	// unit vector in r, theta, phi
 
@@ -293,7 +293,7 @@ double farfactor(int ifreq)
 {
 	double ffctr = 0;
 
-	const double kwave = (2 * PI * Freq2[ifreq]) / C;
+	const double kwave = (2 * PI * Freq2[ifreq]) / SPEED_OF_LIGHT;
 
 	if (NFeed) {
 		// feed (post only)

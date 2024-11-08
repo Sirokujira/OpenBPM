@@ -47,10 +47,10 @@ extern "C" {
 #define FN_point    "point.log"
 
 #define PI     (4.0*atan(1.0))
-#define C      (2.99792458e8)
+#define SPEED_OF_LIGHT (2.99792458e8)
 #define MU0    (4*PI*1e-7)
-#define EPS0   (1/(C*C*MU0))
-#define ETA0   (C*MU0)
+#define EPS0   (1/(SPEED_OF_LIGHT*SPEED_OF_LIGHT*MU0))
+#define ETA0   (SPEED_OF_LIGHT*MU0)
 #define EPS    (1e-6)
 #define EPS2   (EPS*EPS)
 #define DTOR   (PI/180)
@@ -231,8 +231,8 @@ EXTERN int64_t      NN;                      // array size
 
 EXTERN double       *Xn, *Yn, *Zn;           // node
 EXTERN double       *Xc, *Yc, *Zc;           // cell center
-EXTERN real_t       *RXn, *RYn, *RZn;        // (C * dt) / d (node)
-EXTERN real_t       *RXc, *RYc, *RZc;        // (C * dt) / d (cell center)
+EXTERN real_t       *RXn, *RYn, *RZn;        // (SPEED_OF_LIGHT * dt) / d (node)
+EXTERN real_t       *RXc, *RYc, *RZc;        // (SPEED_OF_LIGHT * dt) / d (cell center)
 
 EXTERN int64_t      NMaterial;               // number of materials
 EXTERN material_t   *Material;               // material

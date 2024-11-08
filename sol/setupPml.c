@@ -23,7 +23,7 @@ void setupPml(void)
 	const int ly = cPML.l;
 	const int lz = cPML.l;
 
-	const double cdt = C * Dt;
+	const double cdt = SPEED_OF_LIGHT * Dt;
 
 	// E
 	for (int i = -lx + 1; i < Nx + lx; i++) {

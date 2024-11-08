@@ -11,7 +11,7 @@ void eload(void)
 {
 	if (NInductor <= 0) return;
 
-	const double cdt = C * Dt;
+	const double cdt = SPEED_OF_LIGHT * Dt;
 
 	for (int n = 0; n < NInductor; n++) {
 		inductor_t *ptr = &Inductor[n];

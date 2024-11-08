@@ -110,7 +110,7 @@ int input_data(FILE *fp)
 		if      (nline == 0) {
 			strcpy(prog, strkey);
 			if (strcmp(prog, "OpenBPM") && strcmp(prog, "OpenTHFD")) {
-				printf("%s\n", "*** not OpenBPM/OpenTHFD data");
+				printf("%s\n", "*** not OpenBPM data");
 				return 1;
 			}
 			if (ntoken < 3) {

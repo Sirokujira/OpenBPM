@@ -259,7 +259,7 @@ void setup_planewave2(void)
     // 初期位置の設定
     const double r = sqrt((Xn[0] - Xn[Nx]) * (Xn[0] - Xn[Nx]) +
                           (Yn[0] - Yn[Ny]) * (Yn[0] - Yn[Ny]) +
-                          (Zn[0] - Zn[Nz]) * (Zn[0] - Zn[Nz])) / 2 + (0.5 * C / f0);
+                          (Zn[0] - Zn[Nz]) * (Zn[0] - Zn[Nz])) / 2 + (0.5 * SPEED_OF_LIGHT / f0);
     printf("%f\n", r);
     Planewave.r0[0] = ((Xn[0] + Xn[Nx]) / 2 - (r * Planewave.ri[0]));
     Planewave.r0[1] = ((Yn[0] + Yn[Ny]) / 2 - (r * Planewave.ri[1]));
@@ -330,7 +330,7 @@ void setup_planewave(void)
     const double f0 = (Freq2[0] + Freq2[NFreq2 - 1]) / 2;
     const double r = sqrt((Xn[0] - Xn[Nx]) * (Xn[0] - Xn[Nx]) +
                           (Yn[0] - Yn[Ny]) * (Yn[0] - Yn[Ny]) +
-                          (Zn[0] - Zn[Nz]) * (Zn[0] - Zn[Nz])) / 2 + (0.5 * C / f0);
+                          (Zn[0] - Zn[Nz]) * (Zn[0] - Zn[Nz])) / 2 + (0.5 * SPEED_OF_LIGHT / f0);
     //const double r = 10;
     printf("%.10f\n", r); // 0.000003
 

@@ -63,12 +63,18 @@ public:
         }
     }
 
-	std::vector<double> reverseAndNegate(const std::vector<double>& vec) {
-	    std::vector<double> result;
+	// 任意の型のベクターを処理するテンプレート関数
+	template <typename T>
+	std::vector<T> reverseAndNegate(const std::vector<T>& vec) {
+	    std::vector<T> result;
+	    if (vec.empty()) {
+	        return result;
+	    }
+
 	    result.reserve(vec.size() - 1);
 
 	    // vecの要素を逆順に走査し、反転してresultに追加
-	    std::transform(vec.rbegin() + 1, vec.rend(), std::back_inserter(result), [](double val) {
+	    std::transform(vec.rbegin() + 1, vec.rend(), std::back_inserter(result), [](const T& val) {
 	        return -val;
 	    });
 
@@ -92,13 +98,13 @@ public:
             case Symmetry::AntiSymmetric:
                 x.insert(x.begin(), reverseAndNegate(x).begin(), reverseAndNegate(x).end());
                 for (auto& row : field) {
-                    row.insert(row.begin(), -std::vector<std::complex<float>>(row.rbegin() + 1, row.rend()));
+                    row.insert(row.begin(), reverseAndNegate(y).begin(), reverseAndNegate(y).end());
                 }
                 break;
             case Symmetry::Symmetric:
                 x.insert(x.begin(), std::vector<double>(x.rbegin(), x.rend()).begin(), std::vector<double>(x.rbegin(), x.rend()).end());
                 for (auto& row : field) {
-                    row.insert(row.begin(), std::vector<std::complex<float>>(row.rbegin(), row.rend()));
+                    //row.insert(row.begin(), std::vector<std::complex<float>>(row.rbegin(), row.rend()));
                 }
                 break;
         }
@@ -136,15 +142,15 @@ public:
                 // Do nothing
                 break;
             case Symmetry::AntiSymmetric:
-                x.insert(x.begin(), -std::vector<double>(x.rbegin() + 1, x.rend()));
+                x.insert(x.begin(), reverseAndNegate(x).begin(), reverseAndNegate(x).end());
                 for (auto& row : field) {
-                    row.insert(row.begin(), -std::vector<std::complex<float>>(row.rbegin() + 1, row.rend()));
+                    row.insert(row.begin(), reverseAndNegate(row).begin(), reverseAndNegate(row).end());
                 }
                 break;
             case Symmetry::Symmetric:
-                x.insert(x.begin(), -std::vector<double>(x.rbegin(), x.rend()));
+                x.insert(x.begin(), std::vector<double>(x.rbegin(), x.rend()).begin(), std::vector<double>(x.rbegin(), x.rend()).end());
                 for (auto& row : field) {
-                    row.insert(row.begin(), std::vector<std::complex<float>>(row.rbegin(), row.rend()));
+                    //row.insert(row.begin(), std::vector<std::complex<float>>(row.rbegin(), row.rend()));
                 }
                 break;
         }
@@ -155,7 +161,7 @@ public:
                 // Do nothing
                 break;
             case Symmetry::AntiSymmetric:
-                y.insert(y.begin(), -std::vector<double>(y.rbegin() + 1, y.rend()));
+                y.insert(y.begin(), reverseAndNegate(y).begin(), reverseAndNegate(y).end());
                 field.insert(field.begin(), std::vector<std::complex<float>>(field[0].size(), {0, 0}));
                 for (size_t i = 1; i < field.size(); ++i) {
                     for (auto& element : field[i]) {
@@ -164,7 +170,7 @@ public:
                 }
                 break;
             case Symmetry::Symmetric:
-                y.insert(y.begin(), -std::vector<double>(y.rbegin(), y.rend()));
+                y.insert(y.begin(), std::vector<double>(y.rbegin(), y.rend()).begin(), std::vector<double>(y.rbegin(), y.rend()).end());
                 field.insert(field.begin(), std::vector<std::complex<float>>(field[0].size(), {0, 0}));
                 break;
         }

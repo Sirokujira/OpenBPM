@@ -1,0 +1,84 @@
+--- CMakeLists.txt
++++ CMakeLists.txt
+@@ -218,9 +218,9 @@ if (WITH_CUDA)
+             target_include_directories(obpm_cuda_libmpi PUBLIC "${PROJECT_SOURCE_DIR}/include")
+             target_link_libraries(obpm_cuda_libmpi PRIVATE ${CUDA_LIBRARIES})
+             target_link_libraries(obpm_cuda_libmpi PRIVATE OpenMP::OpenMP_C pthread m)
+-            target_link_libraries(obpm_cuda_libmpi PRIVATE MPI::MPI_C hdf5::hdf5)
++            target_link_libraries(obpm_cuda_libmpi PRIVATE MPI::MPI_C HDF5::HDF5)
+             #error
+-            #target_link_libraries(obpm_cuda_libmpi PRIVATE MPI::MPI_C hdf5::hdf5-shared)
++            #target_link_libraries(obpm_cuda_libmpi PRIVATE MPI::MPI_C HDF5::HDF5-shared)
+ 
+             #add_executable(obpm_cuda_mpi ${SOURCES2} ${MPI_SOURCES2} ${CUDA_MPI_SOURCES} ${CUDA_SOURCES2} src/cuda_mpi_Main.cu)
+             add_executable(obpm_cuda_mpi src/cuda_mpi_Main.cu)
+@@ -233,7 +233,7 @@ if (WITH_CUDA)
+             target_link_libraries(obpm_cuda_mpi PRIVATE obpm_cuda_libmpi)
+             target_link_libraries(obpm_cuda_mpi PRIVATE ${CUDA_LIBRARIES})
+             target_link_libraries(obpm_cuda_mpi PRIVATE OpenMP::OpenMP_C pthread m)
+-            target_link_libraries(obpm_cuda_mpi PRIVATE MPI::MPI_C hdf5::hdf5)
++            target_link_libraries(obpm_cuda_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
+         else ()
+             # Add CUDA source files
+             file(GLOB CUDA_SOURCES "cuda/*.cu")
+@@ -299,14 +299,14 @@ if (WITH_CUDA)
+                 #target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C Threads::Threads m)
+                 target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C pthread)
+                 #target_link_libraries(obpm PRIVATE MPI::MPI_C OpenMP::OpenMP_C m)
+-                target_link_libraries(obpm_cuda PRIVATE m hdf5::hdf5)
++                target_link_libraries(obpm_cuda PRIVATE m HDF5::HDF5)
+             else()
+                 message(STATUS "OpenMP not FOUND.")
+                 #target_link_libraries(obpm_cuda PUBLIC m)
+                 #target_link_libraries(obpm_cuda PRIVATE Threads::Threads m)
+                 #target_link_libraries(obpm_cuda PRIVATE Threads::Threads)
+                 target_link_libraries(obpm_cuda PRIVATE pthread)
+-                target_link_libraries(obpm_cuda PRIVATE m hdf5::hdf5)
++                target_link_libraries(obpm_cuda PRIVATE m HDF5::HDF5)
+             endif()
+ 
+         endif()
+@@ -400,9 +400,10 @@ else()
+ 
+         #target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C OpenMP::OpenMP_C m)
+         target_link_libraries(obpm_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads m)
+-        target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C hdf5::hdf5)
++        target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
+     else ()
+-        add_executable(obpm ${SOURCES} src/sol_Main.cpp)
++        #add_executable(obpm ${SOURCES} sol/solve_bpm.cpp src/sol_Main.c)
++        add_executable(obpm ${SOURCES} sol/solve_bpm.cpp src/sol_Main.cpp)
+         #target_link_libraries(obpm glfw)
+         #target_link_libraries(obpm OpenGL::GL)
+ 
+@@ -413,11 +414,11 @@ else()
+         # Link OpenMP libraries to the target
+         if(OpenMP_C_FOUND)
+             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m)
+-            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m hdf5::hdf5 Eigen3::Eigen)
++            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m HDF5::HDF5 Eigen3::Eigen)
+             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_CXX m)
+         else()
+             #target_link_libraries(obpm PRIVATE m)
+-            target_link_libraries(obpm PRIVATE m hdf5::hdf5)
++            target_link_libraries(obpm PRIVATE m HDF5::HDF5)
+         endif()
+ 
+         # ターゲットのオブジェクトディレクトリを設定
+@@ -444,7 +445,7 @@ if (WITH_POST)
+     target_include_directories(obpm_post PUBLIC "${PROJECT_SOURCE_DIR}/include")
+ 
+     #target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m)
+-    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
++    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m HDF5::HDF5)
+ 
+ endif()
+ 
+@@ -466,6 +467,6 @@ endif()
+ #    target_include_directories(obpm_post PUBLIC "${PROJECT_SOURCE_DIR}/include")
+ #
+ #    #target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m)
+-#    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
++#    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m HDF5::HDF5)
+ #
+ #endif()
