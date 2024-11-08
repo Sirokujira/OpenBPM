@@ -3,6 +3,12 @@
 #include "obpm_prototype.h"
 #include "ev.h"
 
+#include "hdf5.h"
+#define FILE_NAME "time_series_data.h5"
+
+#include "bpm/ElectricFieldProfile.hpp"
+#include "bpm/RefractiveIndexProfile.hpp"
+
 #ifdef __NVCC__
   #include <thrust/complex.h>
   typedef thrust::complex<float> floatcomplex;
@@ -99,7 +105,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     char str[BUFSIZ];
     int converged = 0;
 
-	// 加工
+    // 加工
     //ここから
     struct parameters P_var;
     struct parameters *P = &P_var;
@@ -121,7 +127,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->ySymmetry = 0; //NULL; //???(片側設定?)(enum値[0-2])(Array[1,1]?)
     P->d = 0.0; //???
     P->n_0 = 1.41; //[] reference refractive index
-    P->n_in = Zin; //? //(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"n_mat"));
+    //P->n_in = Zin; //? //(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"n_mat"));
     //mwSize nDims = 2
     //mwSize const *dimPtr = mxGetDimensions(mxGetField(prhs[1],0,"n_mat"));
     // 違いが分からない(処理適用範囲?)
@@ -140,7 +146,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->sinBendDirection = 0.0; // sin(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // 向き(rad)
     P->cosBendDirection = 0.0; // cos(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // 向き(rad)
     //初期電界入力?
-	//BPM-MATLAB ではコールバック関数の登録で対応
+    //BPM-MATLAB ではコールバック関数の登録で対応
     P->E1 = NULL; // Input E field(Array)
     //結果格納?
     P->Efinal = NULL; // Output E field(Array)
@@ -151,7 +157,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->E2 = (floatcomplex *)((P->iz_end - P->iz_start)%2? P->Efinal: malloc(P->Nx*P->Ny*sizeof(floatcomplex)));
     #endif
     P->multiplier = NULL; // Array of multiplier values to apply to the E field after each step, due to the edge absorber outside the main simulation window
-	//P->ax = floatcomplex{0.0,0.0}; //*(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"ax"));
+    //P->ax = floatcomplex{0.0,0.0}; //*(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"ax"));
     //P->ay = floatcomplex{0.0,0.0}; //*(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"ay"));
 
     P->EfieldPower = 0;
@@ -178,6 +184,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     #endif
     #endif
 
+    fprintf(stdout, "initfield\n");
+
     // initial field
     initfield();
 
@@ -195,11 +203,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     memset(P_losses, 0, NFreq2 * NN * sizeof(double));
 
     // セルの幅（空間ステップ）を計算
-    double Dx = Xn[Nx] - Xn[0] / Nx;
-    double Dy = Yn[Ny] - Yn[0] / Ny;
-    double Dz = Zn[Nz] - Zn[0] / Nz;
+    double Dx = Xn[Nx-1] - Xn[0] / Nx;
+    double Dy = Yn[Ny-1] - Yn[0] / Ny;
+    double Dz = Zn[Nz-1] - Zn[0] / Nz;
     sprintf(str, "%.6f %.6f %.6f", Dx, Dy, Dz);
-    fprintf(stdout, "%s\n", str);
+    fprintf(stdout, "cell step : %s\n", str);
 
     // HDF5ファイルの作成
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
@@ -216,81 +224,50 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     //double frequency = 200e12;      // 周波数 [Hz]（適宜変更）
     //double omega = 2 * M_PI * frequency; // 角周波数 [rad/s]
     //for (itime = 0; itime <= Solver.maxiter; itime++) {
+    //
     //Step 時間の対応ではなく、Z軸の変化を元に対応していく。
     for(long iz=P->iz_start; iz<P->iz_end; iz++) {
-        // update H
-        t += 0.5 * Dt;
-        updateHx(t);
-        updateHy(t);
-        updateHz(t);
+        sprintf(str, "%d", iz);
+        fprintf(stdout, "iz : %s\n", str);
 
-        // ABC H
-        if      (iABC == 0) {
-            murH(numMurHx, fMurHx, Hx);
-            murH(numMurHy, fMurHy, Hy);
-            murH(numMurHz, fMurHz, Hz);
-        }
-        else if (iABC == 1) {
-            pmlHx();
-            pmlHy();
-            pmlHz();
-        }
+        //z軸を起点とした電界情報(E)を取得
+        ElectricFieldProfile profile;
+        profile.setLx(2.0);
+        profile.setLy(3.0);
+        //profile.setField
+        profile.setLabel("Test Label");
 
-        // PBC H
-        if (PBCx) {
-            pbcx();
-        }
-        if (PBCy) {
-            pbcy();
-        }
-        if (PBCz) {
-            pbcz();
-        }
+        // Example usage of initializeRIfromFunction
+        //std::function<std::complex<float>(const MatrixXf&, const MatrixXf&, const std::vector<std::complex<float>> &)> hFunc = [](const MatrixXf& X, const MatrixXf& Y, const std::vector<std::complex<float>> &nParams) -> MatrixXf {
+        //    return X + Y + nParams[0].real();
+        //};
 
-        // update E
-        t += 0.5 * Dt;
-        updateEx(t);
-        updateEy(t);
-        updateEz(t);
+        //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
+        //profile.initializeRIfromFunction(hFunc, nParameters);
+        
+        //model.electricFieldProfile = profile;
+        //z軸を起点とした屈折率情報(RI)を取得
+        RefractiveIndexProfile profile2;
+        
+        profile2.setLx(2.0);
+        profile2.setLy(3.0);
+        //BPMMatlab.model.refectiveIndexProfile.xSymmetry = None
+        //BPMMatlab.model.refectiveIndexProfile.ySymmetry = None
 
-        // dispersion E
-        if (numDispersionEx) {
-            dispersionEx(t);
-        }
-        if (numDispersionEy) {
-            dispersionEy(t);
-        }
-        if (numDispersionEz) {
-            dispersionEz(t);
-        }
+        // Example usage of initializeRIfromFunction
+        //std::function<std::complex<float>(float, float, float, const std::vector<std::complex<float>> &)> hFunc = [](float x, float y, float z, const std::vector<std::complex<float>> &nParams) -> std::complex<float> {
+        //    return std::complex<float>(x + y + z + nParams[0].real(), 0.0f);
+        //};
+        //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
+        //profile2.initializeRIfromFunction(hFunc, nParameters, 5);
 
-        // ABC E
-        if      (iABC == 1) {
-            pmlEx();
-            pmlEy();
-            pmlEz();
-        }
+        //model.refectiveIndexProfile = profile2;
+        
+        //2D対応
+        
+        //3D対応?
 
-        // feed
-        if (NFeed) {
-            efeed(itime);
-        }
-
-        // inductor
-        if (NInductor) {
-            eload();
-        }
-
-        // point
-        if (NPoint) {
-            vpoint(itime);
-        }
-
-        // DFT
-        //const double t0 = cputime();
-        //dftNear3d(itime);
-        //*tdft += cputime() - t0;
-
+        /*
         #ifdef __NVCC__
             substep1a<<<nBlocks, blockDims>>>(P_dev); // xy -> yx
             substep1b<<<nBlocks, blockDims>>>(P_dev); // yx -> yx
@@ -322,190 +299,13 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         #pragma omp barrier
         #endif
 
-        // average and convergence
-        if ((itime % Solver.nout == 0) || (itime == Solver.maxiter)) {
-            // average
-            double fsum[2];
-            average(fsum);
+        //const double t0 = cputime();
+        //dftNear3d(itime);
+        //*tdft += cputime() - t0;
+        */
 
-            // average (post)
-            Eiter[Niter] = fsum[0];
-            Hiter[Niter] = fsum[1];
-            Niter++;
-
-            // monitor
-            if (io) {
-                sprintf(str, "%7d %.6f %.6f", itime, fsum[0], fsum[1]);
-                fprintf(fp,     "%s\n", str);
-                fprintf(stdout, "%s\n", str);
-                fflush(fp);
-                fflush(stdout);
-
-                // 各時間ステップごとにグループを作成
-                char group_name[32];
-                snprintf(group_name, sizeof(group_name), "/data%06d", itime);
-                group_id = H5Gcreate(file_id, group_name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // Eフィールドデータセットの作成と書き込み
-                hsize_t e_dims[4] = {1, NFreq2, NN, 6};
-                dataspace_id = H5Screate_simple(4, e_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "E", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims[1] = {6};
-                memspace_id = H5Screate_simple(1, mem_dims, NULL);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double e_value[6] = {
-                            cEx_r[n0 + nn], cEy_r[n0 + nn], cEz_r[n0 + nn],
-                            cEx_i[n0 + nn], cEy_i[n0 + nn], cEz_i[n0 + nn]
-                        };
-
-                        hsize_t e_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t e_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, e_offset, NULL, e_count, NULL);
-
-                        // 書き込み
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, e_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing E data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // Hフィールドデータセットの作成と書き込み
-                hsize_t h_dims[4] = {1, NFreq2, NN, 6};
-                dataspace_id = H5Screate_simple(4, h_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "H", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double h_value[6] = {
-                            cHx_r[n0 + nn], cHy_r[n0 + nn], cHz_r[n0 + nn],
-                            cHx_i[n0 + nn], cHy_i[n0 + nn], cHz_i[n0 + nn]
-                        };
-
-                        hsize_t h_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t h_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, h_offset, NULL, h_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, h_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-               }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // 複素数用のHDF5データ型を定義
-                hid_t complex_datatype = H5Tcreate(H5T_COMPOUND, sizeof(d_complex_t));
-                H5Tinsert(complex_datatype, "real", HOFFSET(d_complex_t, r), H5T_NATIVE_DOUBLE);
-                H5Tinsert(complex_datatype, "imag", HOFFSET(d_complex_t, i), H5T_NATIVE_DOUBLE);
-
-                // Surfaceフィールドデータセットの作成と書き込み
-                hsize_t surf_dims[4] = {1, NFreq2, NN, 6};
-                dataspace_id = H5Screate_simple(4, surf_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "Surface", complex_datatype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    //int64_t surf0 = ifreq * NSurface;
-                    for (int surf = 0; surf < NSurface; surf++) {
-                        d_complex_t surf_value[6] = {
-                            SurfaceEx[ifreq][surf], SurfaceEy[ifreq][surf], SurfaceEz[ifreq][surf],
-                            SurfaceHx[ifreq][surf], SurfaceHy[ifreq][surf], SurfaceHz[ifreq][surf]
-                        };
-
-                        hsize_t surf_offset[4] = {0, ifreq, surf, 0};
-                        hsize_t surf_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, surf_offset, NULL, surf_count, NULL);
-                        status = H5Dwrite(dataset_id, complex_datatype, memspace_id, dataspace_id, H5P_DEFAULT, surf_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d, surf=%d\n", itime, ifreq, surf);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // Pフィールドデータセットの作成と書き込み（仮の例）
-                hsize_t p_dims[4] = {1, NFreq2, NN, 3};
-                dataspace_id = H5Screate_simple(4, p_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "P", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims2[1] = {3};
-                memspace_id = H5Screate_simple(1, mem_dims2, NULL);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double p_value[3] = {
-                            cEx_r[n0 + nn] * cHy_r[n0 + nn] - cEy_r[n0 + nn] * cHx_r[n0 + nn],
-                            cEy_r[n0 + nn] * cHz_r[n0 + nn] - cEz_r[n0 + nn] * cHy_r[n0 + nn],
-                            cEz_r[n0 + nn] * cHx_r[n0 + nn] - cEx_r[n0 + nn] * cHz_r[n0 + nn]
-                        };
-
-                        hsize_t p_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t p_count[4] = {1, 1, 1, 3};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, p_offset, NULL, p_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, p_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing P data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // 発熱量の計算
-                hsize_t p_dims2[4] = {1, NFreq2, NN, 1};
-                dataspace_id = H5Screate_simple(4, p_dims2, NULL);
-                dataset_id = H5Dcreate(group_id, "P_loss", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims3[1] = {1};
-                memspace_id = H5Screate_simple(1, mem_dims3, NULL);
-
-                // 材料の特性設定
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        // 発熱量密度の計算
-                        double P_loss[1] = { P_losses[n0 + nn] };
-
-                        hsize_t p_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t p_count[4] = {1, 1, 1, 1};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, p_offset, NULL, p_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, P_loss);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing P data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // グループのクローズ
-                H5Gclose(group_id);
-            }
-
-            // check convergence
-            fmax[0] = MAX(fmax[0], fsum[0]);
-            fmax[1] = MAX(fmax[1], fsum[1]);
-            if ((fsum[0] < fmax[0] * Solver.converg) &&
-                (fsum[1] < fmax[1] * Solver.converg)) {
-                converged = 1;
-                break;
-            }
-            
-            // Niterを増加
-            Niter++;
-        }
+       // Niterを増加
+        Niter++;
     }
     // メモリの解放
     free(T);
@@ -661,7 +461,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         {"VPoint", VPoint, NPoint * (Solver.maxiter + 1)},
         {"Freq1", Freq1, NFreq1},
         {"Freq2", Freq2, NFreq2},
-        {"Gline", Gline, NGline * 2 * 3}
+        //{"Gline", Gline, NGline * 2 * 3}
+        {"Gline", reinterpret_cast<double*>(Gline), NGline * 2 * 3}
     };
 
     for (int i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
@@ -719,5 +520,6 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     *outputPrecisePowerPtr = P->precisePower;
     return;
 }
+
 
 
