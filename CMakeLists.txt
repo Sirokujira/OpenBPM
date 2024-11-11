@@ -263,6 +263,7 @@ if (WITH_CUDA)
                 ${CMAKE_SOURCE_DIR}/cuda/pmlHz.cu
                 ${CMAKE_SOURCE_DIR}/cuda/setup_gpu.cu
                 ${CMAKE_SOURCE_DIR}/cuda/solve.cu
+                ${CMAKE_SOURCE_DIR}/cuda/solve_bpm.cu
                 ${CMAKE_SOURCE_DIR}/cuda/updateEx.cu
                 ${CMAKE_SOURCE_DIR}/cuda/updateEy.cu
                 ${CMAKE_SOURCE_DIR}/cuda/updateEz.cu
@@ -275,7 +276,7 @@ if (WITH_CUDA)
 
             #add_executable(obpm_cuda ${CUDA_SOURCES} src/cuda_Main.cu)
             #add_executable(obpm_cuda ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
-            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} src/cuda_Main.cu)
+            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu src/cuda_Main.cu)
             #add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
 
             target_include_directories(obpm_cuda PUBLIC "${PROJECT_SOURCE_DIR}/include")

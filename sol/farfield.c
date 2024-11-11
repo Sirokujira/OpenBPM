@@ -5,7 +5,7 @@ far field
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 #include "obpm_prototype.h"
 
 void farfield(int ifreq, double theta, double phi, double ffctr, d_complex_t *etheta, d_complex_t *ephi)

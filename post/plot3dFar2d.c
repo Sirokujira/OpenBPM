@@ -5,7 +5,7 @@ plot far2d field (3D)
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 #include "obpm_prototype.h"
 
 static void statistics(d_complex_t **, d_complex_t **, char [], char []);

@@ -5,7 +5,7 @@ plot waveform and spectrum on feeds (2D)
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 #include "obpm_prototype.h"
 #include "ev.h"
 

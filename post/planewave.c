@@ -3,7 +3,7 @@ planewave.c
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 
 void planewave(double freq, double x, double y, double z, d_complex_t e[], d_complex_t h[])
 {

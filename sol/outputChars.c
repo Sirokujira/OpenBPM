@@ -5,7 +5,7 @@ calculate and output to oth.log
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 #include "obpm_prototype.h"
 
 

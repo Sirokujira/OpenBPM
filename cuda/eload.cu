@@ -89,13 +89,13 @@ void eload(void)
 		const int block = MIN(256, NInductor);
 		const int grid = CEIL(NInductor, block);
 		eload_gpu<<<grid, block>>>(
-			NInductor, d_Inductor, C * Dt,
+			NInductor, d_Inductor, SPEED_OF_LIGHT * Dt,
 			Ex, Ey, Ez, Hx, Hy, Hz);
 		if (UM) cudaDeviceSynchronize();
 	}
 	else {
 		eload_cpu(
-			NInductor, Inductor, C * Dt,
+			NInductor, Inductor, SPEED_OF_LIGHT * Dt,
 			Ex, Ey, Ez, Hx, Hy, Hz);
 	}
 }

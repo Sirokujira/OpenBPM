@@ -52,6 +52,10 @@
   #endif
 #endif
 
+struct debug {
+  double             dbls[3];
+  unsigned long long ulls[3];
+};
 
 struct parameters {
   long Nx;
@@ -94,21 +98,25 @@ struct parameters {
 extern "C" {
 #endif
 
-// C
-void substep1a(struct parameters *P_global);
-void substep1b(struct parameters *P_global);
-void substep2a(struct parameters *P_global);
-void substep2b(struct parameters *P_global);
-void applyMultiplier(struct parameters *P_global, long iz, struct debug *D);
-void swapEPointers(struct parameters *P, long iz);
-void updatePrecisePower(struct parameters *P);
+extern void substep1a(struct parameters *);
+extern void substep1b(struct parameters *);
+extern void substep2a(struct parameters *);
+extern void substep2b(struct parameters *);
+extern void applyMultiplier(struct parameters *, long, struct debug*);
+extern void swapEPointers(struct parameters *, long);
+extern void updatePrecisePower(struct parameters *);
+
 #ifdef __cplusplus
 }
 #endif
 
+//extern void applyMultiplier(struct parameters *, long, struct debug*);
 
 // CUDA
 #ifdef __CUDACC__
+extern void gpuAssert(cudaError_t code, const char *file, int line);
+extern void createDeviceStructs(struct parameters *P, struct parameters **P_devptr, struct debug *D, struct debug **D_devptr);
+extern void retrieveAndFreeDeviceStructs(struct parameters *P, struct parameters *P_dev, struct debug *D, struct debug *D_dev);
 #endif
 
 #endif

@@ -10,6 +10,7 @@ solver
 #undef MAIN
 
 #include "obpm_prototype.h"
+#include "bpm/bpm_prototype.h"
 
 static void args(int, char *[], int *, int *, char [], char []);
 static void error_check(int, int);
@@ -101,7 +102,8 @@ int main(int argc, char *argv[])
 	double tdft = 0;
 
 	// solve
-	solve(io, &tdft, fp_log);
+	//solve(io, &tdft, fp_log);
+	solve_bpm(io, &tdft, fp_log);
 
 	// cpu time
 	if (GPU) cudaDeviceSynchronize();

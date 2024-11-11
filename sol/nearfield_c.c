@@ -5,7 +5,7 @@ near field at node (i, j, k) (complex)
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 
 // E at node
 void NodeE_c(int ifreq, int i, int j, int k, d_complex_t *cex, d_complex_t *cey, d_complex_t *cez)

@@ -5,7 +5,7 @@ plot and log of near2d (2D+3D)
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 #include "obpm_prototype.h"
 #include "ev.h"
 

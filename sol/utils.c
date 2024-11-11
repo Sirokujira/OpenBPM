@@ -12,7 +12,7 @@ utilities
 typedef struct {double r, i;} d_complex_t;
 typedef struct {float  r, i;} f_complex_t;
 
-#include "complex.h"
+#include "user_define_complex.h"
 
 // tokenize a string
 int tokenize(char *str, const char *tokensep, char *token[], int maxtoken)

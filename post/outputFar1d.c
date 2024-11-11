@@ -5,7 +5,7 @@ output far1d field
 */
 
 #include "obpm.h"
-#include "complex.h"
+#include "user_define_complex.h"
 #include "obpm_prototype.h"
 
 

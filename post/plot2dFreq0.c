@@ -12,7 +12,7 @@ plot frequency char.s (2D)
 typedef struct {double r, i;} d_complex_t;
 typedef struct {float  r, i;} f_complex_t;
 
-#include "complex.h"
+#include "user_define_complex.h"
 #include "ev.h"
 
 typedef struct {
