@@ -17,7 +17,7 @@ void planewave(double freq, double x, double y, double z, d_complex_t e[], d_com
 	                 + (y - y0) * Planewave.ri[1]
 	                 + (z - z0) * Planewave.ri[2];
 
-	const double k = (2 * PI * freq) / C;
+	const double k = (2 * PI * freq) / SPEED_OF_LIGHT;
 
 	const d_complex_t phs = d_exp(-k * rri);
 

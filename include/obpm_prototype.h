@@ -153,6 +153,7 @@ extern void        pbcx(void);
 extern void        pbcy(void);
 extern void        pbcz(void);
 extern void        solve(int, double *, FILE *);
+extern void        solve_bpm(int, double *, FILE *);
 extern void        updateEx(double);
 extern void        updateEy(double);
 extern void        updateEz(double);

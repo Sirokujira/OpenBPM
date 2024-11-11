@@ -6,9 +6,11 @@
 #include "hdf5.h"
 #define FILE_NAME "time_series_data.h5"
 
+#include "bpm/bpm_prototype.h"
 #include "bpm/ElectricFieldProfile.hpp"
 #include "bpm/RefractiveIndexProfile.hpp"
 
+/*
 #ifdef __NVCC__
   #include <thrust/complex.h>
   typedef thrust::complex<float> floatcomplex;
@@ -91,7 +93,7 @@ struct parameters {
   float precisePowerDiff;
   float EfieldPower;
 };
-
+*/
 
 void solve_bpm(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
@@ -128,7 +130,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->d = 0.0; //???
     P->n_0 = 1.41; //[] reference refractive index
     //P->n_in = Zin; //? //(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"n_mat"));
-    //mwSize nDims = 2
+	// input refractive index(Array)
+    P->n_in = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
+	//mwSize nDims = 2
     //mwSize const *dimPtr = mxGetDimensions(mxGetField(prhs[1],0,"n_mat"));
     // 違いが分からない(処理適用範囲?)
     P->Nx_n = Nx; // 
@@ -147,31 +151,21 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->cosBendDirection = 0.0; // cos(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // 向き(rad)
     //初期電界入力?
     //BPM-MATLAB ではコールバック関数の登録で対応
-    P->E1 = NULL; // Input E field(Array)
+    //P->E1 = NULL; // Input E field(Array)
+	P->E1 = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
+	P->E2 = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
     //結果格納?
-    P->Efinal = NULL; // Output E field(Array)
-    P->n_out = NULL; //Output refractive index(Array)
+    P->Efinal = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); // Output E field(Array)
+    P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); //Output refractive index(Array)
     //ガウシアンビームの出力値?
     P->precisePower = 10.0; // (float)mxGetScalar(mxGetField(prhs[1],0,"inputPrecisePower"));
-    #ifndef __NVCC__
-    P->E2 = (floatcomplex *)((P->iz_end - P->iz_start)%2? P->Efinal: malloc(P->Nx*P->Ny*sizeof(floatcomplex)));
-    #endif
-    P->multiplier = NULL; // Array of multiplier values to apply to the E field after each step, due to the edge absorber outside the main simulation window
+    //P->multiplier = NULL; // Array of multiplier values to apply to the E field after each step, due to the edge absorber outside the main simulation window
+	P->multiplier = (float *)malloc((P->Nx * P->Ny)*sizeof(float));
     //P->ax = floatcomplex{0.0,0.0}; //*(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"ax"));
     //P->ay = floatcomplex{0.0,0.0}; //*(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"ay"));
 
     P->EfieldPower = 0;
     P->precisePowerDiff = 0;
-    #ifdef __NVCC__
-    int temp, nBlocks; gpuErrchk(cudaOccupancyMaxPotentialBlockSize(&nBlocks,&temp,&substep1a,0,0));
-    dim3 blockDims(TILE_DIM,TILE_DIM,1);
-
-    struct parameters *P_dev;
-    struct debug D_var = {{0.0,0.0,0.0},{0,0,0}};
-    struct debug *D = &D_var;
-    struct debug *D_dev;
-    createDeviceStructs(P,&P_dev,D,&D_dev);
-    #else
     #ifdef _OPENMP
     bool useAllCPUs = false; //mxIsLogicalScalarTrue(mxGetField(prhs[1],0,"useAllCPUs"));
     long numThreads = useAllCPUs || omp_get_num_procs() == 1? omp_get_num_procs(): omp_get_num_procs()-1;
@@ -181,7 +175,6 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->b = (floatcomplex *)malloc(numThreads*MAX(P->Nx,P->Ny)*sizeof(floatcomplex));
     #ifdef _OPENMP
     #pragma omp parallel num_threads(useAllCPUs || omp_get_num_procs() == 1? omp_get_num_procs(): omp_get_num_procs()-1)
-    #endif
     #endif
 
     fprintf(stdout, "initfield\n");
@@ -223,88 +216,84 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     double mu_double_prime = 1e-3; // 磁気損失係数 [H/m]（適宜変更）
     //double frequency = 200e12;      // 周波数 [Hz]（適宜変更）
     //double omega = 2 * M_PI * frequency; // 角周波数 [rad/s]
-    //for (itime = 0; itime <= Solver.maxiter; itime++) {
-    //
-    //Step 時間の対応ではなく、Z軸の変化を元に対応していく。
-    for(long iz=P->iz_start; iz<P->iz_end; iz++) {
-        sprintf(str, "%d", iz);
-        fprintf(stdout, "iz : %s\n", str);
+    for (itime = 0; itime <= Solver.maxiter; itime++) 
+    {
+        //Step 時間の対応ではなく、Z軸の変化を元に対応していく。
+        for(long iz = P->iz_start; iz < P->iz_end; iz++) {
+            sprintf(str, "itime : %d, iz : %d", itime, iz);
+            fprintf(stdout, "%s\n", str);
 
-        //z軸を起点とした電界情報(E)を取得
-        ElectricFieldProfile profile;
-        profile.setLx(2.0);
-        profile.setLy(3.0);
-        //profile.setField
-        profile.setLabel("Test Label");
+            const double t0 = cputime();
 
-        // Example usage of initializeRIfromFunction
-        //std::function<std::complex<float>(const MatrixXf&, const MatrixXf&, const std::vector<std::complex<float>> &)> hFunc = [](const MatrixXf& X, const MatrixXf& Y, const std::vector<std::complex<float>> &nParams) -> MatrixXf {
-        //    return X + Y + nParams[0].real();
-        //};
+            //z軸を起点とした電界情報(E)を取得
+            ElectricFieldProfile profile;
+            profile.setLx(2.0);
+            profile.setLy(3.0);
+            //profile.setField
+            profile.setLabel("Test Label");
 
-        //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
-        //profile.initializeRIfromFunction(hFunc, nParameters);
-        
-        //model.electricFieldProfile = profile;
-        //z軸を起点とした屈折率情報(RI)を取得
-        RefractiveIndexProfile profile2;
-        
-        profile2.setLx(2.0);
-        profile2.setLy(3.0);
-        //BPMMatlab.model.refectiveIndexProfile.xSymmetry = None
-        //BPMMatlab.model.refectiveIndexProfile.ySymmetry = None
+            // Example usage of initializeRIfromFunction
+            //std::function<std::complex<float>(const MatrixXf&, const MatrixXf&, const std::vector<std::complex<float>> &)> hFunc = [](const MatrixXf& X, const MatrixXf& Y, const std::vector<std::complex<float>> &nParams) -> MatrixXf {
+            //    return X + Y + nParams[0].real();
+            //};
 
-        // Example usage of initializeRIfromFunction
-        //std::function<std::complex<float>(float, float, float, const std::vector<std::complex<float>> &)> hFunc = [](float x, float y, float z, const std::vector<std::complex<float>> &nParams) -> std::complex<float> {
-        //    return std::complex<float>(x + y + z + nParams[0].real(), 0.0f);
-        //};
-        //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
-        //profile2.initializeRIfromFunction(hFunc, nParameters, 5);
+            //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
+            //profile.initializeRIfromFunction(hFunc, nParameters);
+            
+            //model.electricFieldProfile = profile;
+            //z軸を起点とした屈折率情報(RI)を取得
+            RefractiveIndexProfile profile2;
+            
+            profile2.setLx(2.0);
+            profile2.setLy(3.0);
+            //BPMMatlab.model.refectiveIndexProfile.xSymmetry = None
+            //BPMMatlab.model.refectiveIndexProfile.ySymmetry = None
 
-        //model.refectiveIndexProfile = profile2;
-        
-        //2D対応
-        
-        //3D対応?
+            // Example usage of initializeRIfromFunction
+            //std::function<std::complex<float>(float, float, float, const std::vector<std::complex<float>> &)> hFunc = [](float x, float y, float z, const std::vector<std::complex<float>> &nParams) -> std::complex<float> {
+            //    return std::complex<float>(x + y + z + nParams[0].real(), 0.0f);
+            //};
+            //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
+            //profile2.initializeRIfromFunction(hFunc, nParameters, 5);
 
-        /*
-        #ifdef __NVCC__
-            substep1a<<<nBlocks, blockDims>>>(P_dev); // xy -> yx
-            substep1b<<<nBlocks, blockDims>>>(P_dev); // yx -> yx
-            substep2a<<<nBlocks, blockDims>>>(P_dev); // yx -> xy
-            substep2b<<<nBlocks, blockDims>>>(P_dev); // xy -> xy
-            applyMultiplier<<<nBlocks, blockDims>>>(P_dev,iz,D_dev); // xy -> xy
-        #else
+            //model.refectiveIndexProfile = profile2;
+            
+            //2D対応
+            //3D対応?
+            sprintf(str, "substep1a");
+            fprintf(stdout, "%s\n", str);
             substep1a(P);
+            sprintf(str, "substep1b");
+            fprintf(stdout, "%s\n", str);
             substep1b(P);
+            sprintf(str, "substep2a");
+            fprintf(stdout, "%s\n", str);
             substep2a(P);
+            sprintf(str, "substep2b");
+            fprintf(stdout, "%s\n", str);
             substep2b(P);
+            sprintf(str, "applyMultiplier");
+            fprintf(stdout, "%s\n", str);
             applyMultiplier(P,iz,NULL);
-        #endif
 
-        #ifdef _OPENMP
-        #pragma omp master
-        #endif
-        {
-            #ifdef __NVCC__
-            if(iz+1 < P->iz_end) swapEPointers<<<1,1>>>(P_dev,iz);
-            updatePrecisePower<<<1,1>>>(P_dev);
-            gpuErrchk(cudaDeviceSynchronize()); // Wait until all kernels have finished
-            #else
-            if(iz+1 < P->iz_end) swapEPointers(P,iz);
-            updatePrecisePower(P);
+            #ifdef _OPENMP
+            #pragma omp master
             #endif
+            {
+                if(iz+1 < P->iz_end) swapEPointers(P,iz);
+                updatePrecisePower(P);
+            }
+            #ifdef _OPENMP
+            #pragma omp barrier
+            #endif
+
+            *tdft += cputime() - t0;
         }
-        #ifdef _OPENMP
-        #pragma omp barrier
-        #endif
+    	//格納?
+	    //P->Efinal = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); // Output E field(Array)
+	    //P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); //Output refractive index(Array)
 
-        //const double t0 = cputime();
-        //dftNear3d(itime);
-        //*tdft += cputime() - t0;
-        */
-
-       // Niterを増加
+        // Niterを増加
         Niter++;
     }
     // メモリの解放
@@ -508,18 +497,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // free
     memfree2();
 
-    #ifdef __NVCC__
-    gpuErrchk(cudaDeviceSynchronize()); // Wait until all kernels have finished
-    retrieveAndFreeDeviceStructs(P,P_dev,D,D_dev);
-    //   printf("\nDebug: %.18e %.18e %.18e %llu %llu %llu\n          ",D->dbls[0],D->dbls[1],D->dbls[2],D->ulls[0],D->ulls[1],D->ulls[2]);
-    #else
     //if(P->E1 != mxGetData(prhs[0]) && P->E1 != P->Efinal) free(P->E1); // Part of the reason for checking this is to properly handle ctrl-c cases
     free(P->b);
-    #endif
-    double *outputPrecisePowerPtr = NULL; //(double *)mxGetData(plhs[2] = mxCreateDoubleMatrix(1,1,mxREAL));
+
+	double *outputPrecisePowerPtr = NULL; //(double *)mxGetData(plhs[2] = mxCreateDoubleMatrix(1,1,mxREAL));
     *outputPrecisePowerPtr = P->precisePower;
     return;
 }
-
-
 

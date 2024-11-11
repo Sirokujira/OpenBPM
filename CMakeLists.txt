@@ -403,7 +403,7 @@ else()
         target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
     else ()
         #add_executable(obpm ${SOURCES} sol/solve_bpm.cpp src/sol_Main.c)
-        add_executable(obpm ${SOURCES} sol/solve_bpm.cpp src/sol_Main.cpp)
+        add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c sol/solve_bpm.cpp src/sol_Main.cpp)
         #target_link_libraries(obpm glfw)
         #target_link_libraries(obpm OpenGL::GL)
 
