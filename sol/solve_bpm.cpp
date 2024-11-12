@@ -10,90 +10,6 @@
 #include "bpm/ElectricFieldProfile.hpp"
 #include "bpm/RefractiveIndexProfile.hpp"
 
-/*
-#ifdef __NVCC__
-  #include <thrust/complex.h>
-  typedef thrust::complex<float> floatcomplex;
-  #define I thrust::complex<float>{0,1}
-  #define CEXPF(x) (thrust::exp(x))
-  #define CREALF(x) (x.real())
-  #define CIMAGF(x) (x.imag())
-  #define MAX(x,y) (max(x,y))
-  #define MIN(x,y) (min(x,y))
-  #define FLOORF(x) (floor(x))
-  #include <nvml.h>
-  #define TILE_DIM 32
-#else
-  #ifdef __GNUC__ // This is defined for GCC and CLANG but not for Microsoft Visual C++ compiler
-    //#define MAX(a,b) ({__typeof__ (a) _a = (a); __typeof__ (b) _b = (b); _a > _b? _a: _b;})
-    //#define MIN(a,b) ({__typeof__ (a) _a = (a); __typeof__ (b) _b = (b); _a > _b? _b: _a;})
-    // Prevent conflicting definition of d_complex_t
-    #include <stdbool.h>
-    #include <complex.h>
-
-    //typedef float complex floatcomplex;
-    typedef float _Complex floatcomplex;
-    //#define I (1.0f * _Complex_I)
-    // 手動で虚数単位を定義
-    #define I ((float _Complex) 0.0f + 1.0f * (float _Complex) 1.0f)
-    #define CEXPF(x) (cexpf(x))
-    #define CREALF(x) (crealf(x))
-    #define CIMAGF(x) (cimagf(x))
-    //#define I std::complex<float>{0,1}
-    //#define CREALF(x) (x.r)
-    //#define CIMAGF(x) (x.i)
-    #define FLOORF(x) (floorf(x))
-  #else
-    #include <algorithm>
-    #include <complex>
-    typedef std::complex<float> floatcomplex;
-    #define I std::complex<float>{0,1}
-    #define CEXPF(x) (std::exp(x))
-    #define CREALF(x) (x.r)
-    #define CIMAGF(x) (x.i)
-    #define MAX(x,y) (std::max(x,y))
-    #define MIN(x,y) (std::min(x,y))
-    #define FLOORF(x) (std::floor(x))
-  #endif
-#endif
-
-struct parameters {
-  long Nx;
-  long Ny;
-  float dx;
-  float dy;
-  float dz;
-  long iz_start;
-  long iz_end;
-  unsigned char xSymmetry;
-  unsigned char ySymmetry;
-  float taperPerStep;
-  float twistPerStep;
-  float d;
-  float n_0;
-  floatcomplex *n_in;
-  long  Nx_n;
-  long  Ny_n;
-  long  Nz_n;
-  float dz_n;
-  floatcomplex *Efinal;
-  floatcomplex *E1;
-  floatcomplex *E2;
-  floatcomplex *Eyx;
-  floatcomplex *n_out;
-  floatcomplex *b;
-  float *multiplier;
-  floatcomplex ax;
-  floatcomplex ay;
-  float rho_e;
-  float RoC;
-  float sinBendDirection;
-  float cosBendDirection;
-  double precisePower;
-  float precisePowerDiff;
-  float EfieldPower;
-};
-*/
 
 void solve_bpm(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
@@ -132,6 +48,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     //P->n_in = Zin; //? //(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"n_mat"));
 	// input refractive index(Array)
     P->n_in = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
+
 	//mwSize nDims = 2
     //mwSize const *dimPtr = mxGetDimensions(mxGetField(prhs[1],0,"n_mat"));
     // 違いが分からない(処理適用範囲?)
@@ -147,8 +64,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->twistPerStep = 0.0; //*(float *)mxGetData(mxGetField(prhs[1],0,"twistPerStep"));
     P->rho_e = 0.0; // ?(Array)
     P->RoC = 0.0; // ?(Array)
-    P->sinBendDirection = 0.0; // sin(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // 向き(rad)
-    P->cosBendDirection = 0.0; // cos(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // 向き(rad)
+    P->sinBendDirection = 0.0; // sin(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // y向き(rad)
+    P->cosBendDirection = 0.0; // cos(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // x向き(rad)
     //初期電界入力?
     //BPM-MATLAB ではコールバック関数の登録で対応
     //P->E1 = NULL; // Input E field(Array)
@@ -225,6 +142,21 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
 
             const double t0 = cputime();
 
+            // 反射強度フィールドデータセットの作成と設定
+            sprintf(str, "set Refractive");
+            fprintf(stdout, "%s\n", str);
+            for (int iy = 0; iy < P->Ny; iy++)
+            {
+                for (int ix = 0; ix < P->Nx; ix++)
+                {
+                    int index =  (P->Nx * iy) + ix;
+                    int nn = NA(ix,iy,iz);
+                    double ref_value[1] = { sqrt(Material[iEx[nn]].epsr) };
+                    floatcomplex comp = {ref_value[1], 0.0};
+                    P->n_in[index] = comp;
+                }
+            }
+
             //z軸を起点とした電界情報(E)を取得
             ElectricFieldProfile profile;
             profile.setLx(2.0);
@@ -242,10 +174,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             
             //model.electricFieldProfile = profile;
             //z軸を起点とした屈折率情報(RI)を取得
-            RefractiveIndexProfile profile2;
-            
-            profile2.setLx(2.0);
-            profile2.setLy(3.0);
+            //RefractiveIndexProfile profile2;
+            //profile2.setLx(2.0);
+            //profile2.setLy(3.0);
             //BPMMatlab.model.refectiveIndexProfile.xSymmetry = None
             //BPMMatlab.model.refectiveIndexProfile.ySymmetry = None
 
