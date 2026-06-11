@@ -23,8 +23,13 @@ cmake --build build -j
 
 ## 実行
 
-入力データは OpenFDTD 形式です。サンプル: `data/waveguide.ofd`
-(ステップインデックス導波路, 波長 1.55um)
+入力データは OpenFDTD 形式です。BPM を適用したサンプル (波長 1.55um):
+
+| ファイル | 内容 |
+|---|---|
+| `data/waveguide.ofd` | ステップインデックス導波路 (コア 4um 角 n=1.450 / クラッド n=1.444)。コアへのビーム閉じ込め |
+| `data/freespace.ofd` | 均一媒質中のガウシアンビーム回折。解析解 w(z)=w0*sqrt(1+(z/zR)^2) と比較可能 |
+| `data/lossy.ofd` | 導電率 sigma=100 S/m の吸収媒質。解析解 exp(-2*k0*n''*z) と比較可能 |
 
 ```sh
 ./bin/obpm data/waveguide.ofd
