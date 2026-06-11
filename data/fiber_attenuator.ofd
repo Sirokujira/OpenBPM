@@ -1,0 +1,51 @@
+# OpenBPM sample : attenuating fiber (減衰ファイバ / ドープコアの伝搬損失)
+#
+# コアに損失材料を持つ光ファイバの減衰シミュレーション (BPM)
+#   - 構成は data/fiber.ofd と同一 (SMF-28 相当, LP01 のみ伝搬)
+#   - コア材料に導電率 sigma = 13.3 S/m を付与 (吸収ドープの模擬)
+#
+# 導電率は複素屈折率の虚部に変換される:
+#   n'' = sigma/(2*n'*omega*eps0) = 4.3e-4
+#   コア内の強度減衰係数 2*k0*n'' = 3.46e3 [1/m] (z = 200um で exp(-0.69) = 0.50)
+#
+# LP01 モードの電力は一部クラッド (無損失) にも分布するため、
+# 実効減衰はコア閉じ込め率 Gamma (~0.8) を掛けた
+#   P(z)/P(0) = exp(-2*k0*n''*Gamma*z) ~ 0.57 (z = 200um)
+# 程度になる。
+#
+# 期待される動作 (BPM のロジック確認ポイント):
+#   1. ビーム形状 (LP01) を維持したまま電力のみが指数減衰する
+#   2. 減衰率が「コアの材料損失 x モードのコア閉じ込め率」で決まる
+#      (均一吸収媒質 data/lossy.ofd との違い)
+OpenBPM 2 2
+title = attenuating fiber (BPM sample)
+
+xmesh = -15e-6 90 15e-6
+ymesh = -15e-6 90 15e-6
+zmesh = 0 200 200e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>
+# クラッド (n = 1.4440, 無損失)
+material = 1 2.085136 0 1 0
+# コア (n = 1.4504, sigma = 13.3 S/m -> n'' = 4.3e-4)
+material = 1 2.103660 13.3 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -15e-6 15e-6 -15e-6 15e-6 0 200e-6
+geometry = 3 13 -4.1e-6 4.1e-6 -4.1e-6 4.1e-6 0 200e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> : LP01 に整合した励振
+beam = 4.7e-6
+
+# refindex = <n0>
+refindex = 1.444
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end
