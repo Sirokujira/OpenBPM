@@ -19,6 +19,10 @@ void outputChars(FILE *fp)
 	if (NFeed && NFreq1) {
 		calcZin();
 		outputZin(fp);
+	}
+
+	// input power (writeout は NFeed * NFreq2 個を書き出すため NFreq1 とは独立に確保する)
+	if (NFeed && NFreq2) {
 		calcPin();  // for post
 	}
 
