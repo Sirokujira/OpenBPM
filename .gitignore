@@ -52,7 +52,7 @@ Mkfile.old
 dkms.conf
 
 # Build outputs
-build/
+build*/
 bin/
 
 # Simulation outputs
