@@ -28,9 +28,21 @@ cmake --build build -j
 ```
 
 - 周波数 (`frequency2`) から波長を決定し、材料 (`material`/`geometry`) の
-  比誘電率から屈折率分布を構築して z 軸方向にビームを伝搬します。
+  比誘電率と導電率から複素屈折率分布 (実部=屈折率, 虚部=吸収) を構築して
+  z 軸方向にビームを伝搬します。
 - 結果は `time_series_data.h5` (HDF5) に出力されます
-  (`/field/Efinal_r`, `/field/Efinal_i` : 最終電界、`/field/n_out_r` : 屈折率分布)。
+  (`/field/Efinal_r`, `/field/Efinal_i` : 最終電界、`/field/n_out_r` : 屈折率分布、
+  `/metadata/lambda`, `/metadata/n_0`, `/metadata/beam_w0` : BPM パラメータ)。
+
+### BPM 用キーワード (OpenFDTD 形式の拡張)
+
+| キーワード | 形式 | 意味 |
+|---|---|---|
+| `beam` | `beam = <w0[m]> [<x0[m]> <y0[m]>]` | 入射ガウシアンビームのウェスト (1/e^2 強度半径) と中心。中心省略時は `feed` 位置 (なければ領域中心) |
+| `refindex` | `refindex = <n0>` | BPM の参照屈折率。省略時は領域中心の材料から自動取得 |
+
+- `feed` の電圧はビーム振幅として使用されます。
+- メッシュは等間隔を推奨します (不均一の場合は平均セル幅で計算し警告を表示)。
 
 # Reference
 OpenFDTD

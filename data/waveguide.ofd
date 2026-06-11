@@ -17,8 +17,14 @@ material = 1 2.102500 0 1 0
 geometry = 2 1 -10e-6 10e-6 -10e-6 10e-6 0 100e-6
 geometry = 3 1 -2e-6 2e-6 -2e-6 2e-6 0 100e-6
 
-# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>  (ビーム中心・振幅として使用)
 feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> [<x0[m]> <y0[m]>] : ガウシアンビームウェスト(1/e^2強度半径)と中心
+beam = 2.5e-6
+
+# refindex = <n0> : BPM参照屈折率 (未指定時は領域中心の材料から自動取得)
+refindex = 1.444
 
 frequency1 = 1.93414489e14 1.93414489e14 0
 frequency2 = 1.93414489e14 1.93414489e14 0

@@ -65,6 +65,11 @@ int input_data(FILE *fp)
 	Solver.nout = 50;
 	Solver.converg = 1e-3;
 
+	BPM.w0 = 0;       // 0 = auto
+	BPM.x0 = BPM.y0 = 0;
+	BPM.center = 0;
+	BPM.n0 = 0;       // 0 = auto
+
 	NFreq1 =
 	NFreq2 = 0;
 
@@ -445,6 +450,27 @@ int input_data(FILE *fp)
 		}
 		else if (!strcmp(strkey, "plot3dgeom")) {
 			Plot3dGeom = atoi(token[2]);
+		}
+		else if (!strcmp(strkey, "beam")) {
+			// beam = <w0[m]> [<x0[m]> <y0[m]>]
+			BPM.w0 = atof(token[2]);
+			if (BPM.w0 <= 0) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+			if (ntoken > 4) {
+				BPM.x0 = atof(token[3]);
+				BPM.y0 = atof(token[4]);
+				BPM.center = 1;
+			}
+		}
+		else if (!strcmp(strkey, "refindex")) {
+			// refindex = <n0> : BPM reference refractive index
+			BPM.n0 = atof(token[2]);
+			if (BPM.n0 <= 0) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
 		}
 	}
 /*

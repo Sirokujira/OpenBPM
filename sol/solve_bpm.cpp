@@ -29,12 +29,59 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     if (io) fprintf(fp, "%s\n", str);
     fprintf(stdout, "%s\n", str);
 
+    // 不均一メッシュの警告 : BPM カーネルは等間隔グリッドを仮定するため、
+    // 不均一の場合は平均セル幅で計算される
+    {
+        const char *axisname[] = {"x", "y", "z"};
+        double *node[] = {Xn, Yn, Zn};
+        const int ncell[] = {Nx, Ny, Nz};
+        for (int a = 0; a < 3; a++) {
+            double dmin = node[a][1] - node[a][0];
+            double dmax = dmin;
+            for (int i = 1; i < ncell[a]; i++) {
+                double d = node[a][i + 1] - node[a][i];
+                if (d < dmin) dmin = d;
+                if (d > dmax) dmax = d;
+            }
+            if ((dmax - dmin) > (1e-6 * dmax)) {
+                sprintf(str, "*** warning : %smesh is not uniform (min=%.6e, max=%.6e). BPM uses the average cell width.",
+                        axisname[a], dmin, dmax);
+                if (io) fprintf(fp, "%s\n", str);
+                fprintf(stdout, "%s\n", str);
+            }
+        }
+    }
+
     // 波長 : OpenFDTD の周波数データ (frequency2 優先) から決定する
     double lambda;
     if      (NFreq2 > 0) lambda = SPEED_OF_LIGHT / Freq2[0];
     else if (NFreq1 > 0) lambda = SPEED_OF_LIGHT / Freq1[0];
     else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
     const double k0 = (2 * PI) / lambda;
+
+    // 材料毎の複素屈折率テーブル : n = sqrt(epsr - i*sigma/(omega*eps0))
+    // 損失を imag(n) > 0 として格納する (applyMultiplier の exp(d*imag(n)), d < 0 の規約)
+    floatcomplex *n_mat = (floatcomplex *)malloc(NMaterial * sizeof(floatcomplex));
+    {
+        const double omega = 2 * PI * SPEED_OF_LIGHT / lambda;
+        for (int64_t m = 0; m < NMaterial; m++) {
+            double epsr, sgm;
+            if (Material[m].type == 2) {
+                // 分散性材料は einf で近似 (BPM の単一波長計算)
+                epsr = Material[m].einf;
+                sgm  = 0;
+            }
+            else {
+                epsr = Material[m].epsr;
+                sgm  = Material[m].esgm;
+            }
+            if (epsr <= 0) epsr = 1;  // PEC 等は BPM では真空扱い
+            const double s = sgm / (omega * EPS0);
+            const double mag = sqrt((epsr * epsr) + (s * s));
+            floatcomplex v = {(float)sqrt((mag + epsr) / 2), (float)sqrt((mag - epsr) / 2)};
+            n_mat[m] = v;
+        }
+    }
 
     // BPM パラメータ (BPM-MATLAB の FDBPM に対応)
     struct parameters P_var;
@@ -56,10 +103,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->xSymmetry = 0;
     P->ySymmetry = 0;
 
-    // 参照屈折率 : 計算領域中心 (z=先頭スライス) の材料から取得する
-    {
-        int nn0 = NA(Nx / 2, Ny / 2, 0);
-        P->n_0 = (float)sqrt(Material[iEx[nn0]].epsr);
+    // 参照屈折率 : 入力 (refindex =) を優先し、
+    // 未指定なら計算領域中心 (z=先頭スライス) の材料から取得する
+    if (BPM.n0 > 0) {
+        P->n_0 = (float)BPM.n0;
+    }
+    else {
+        int64_t nn0 = NA(Nx / 2, Ny / 2, 0);
+        P->n_0 = CREALF(n_mat[iEx[nn0]]);
     }
 
     // 位相・損失係数 d = -dz*k0
@@ -91,14 +142,31 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
 	P->multiplier = (float *)malloc((P->Nx * P->Ny)*sizeof(float));
 
     // 初期電界 (ガウシアンビーム) と端部吸収体 (multiplier) の設定
+    // - ビームウェスト : 入力 (beam =) を優先し、未指定なら領域幅の 1/4
+    // - ビーム中心    : 入力 (beam = w0 x0 y0) > 給電点 (feed) > 領域中心
+    // - 振幅          : 給電点の電圧 (未指定なら 1)
+    double w0, xc0, yc0;
     {
-        const double xc0 = 0.5 * (Xn[0] + Xn[Nx]);
-        const double yc0 = 0.5 * (Yn[0] + Yn[Ny]);
         const double Lx = Xn[Nx] - Xn[0];
         const double Ly = Yn[Ny] - Yn[0];
-        const double w0 = 0.25 * MIN(Lx, Ly);     // ビームウェスト
-        const double xEdge = 0.45 * Lx;           // 吸収体開始位置 (中心からの距離)
+        w0 = (BPM.w0 > 0) ? BPM.w0 : 0.25 * MIN(Lx, Ly);  // ビームウェスト
+        if (BPM.center) {
+            xc0 = BPM.x0;
+            yc0 = BPM.y0;
+        }
+        else if (NFeed > 0) {
+            xc0 = Xn[Feed[0].i];
+            yc0 = Yn[Feed[0].j];
+        }
+        else {
+            xc0 = 0.5 * (Xn[0] + Xn[Nx]);
+            yc0 = 0.5 * (Yn[0] + Yn[Ny]);
+        }
+        const double volt = (NFeed > 0) ? Feed[0].volt : 1;
+        const double xEdge = 0.45 * Lx;           // 吸収体開始位置 (領域中心からの距離)
         const double yEdge = 0.45 * Ly;
+        const double xmid = 0.5 * (Xn[0] + Xn[Nx]);
+        const double ymid = 0.5 * (Yn[0] + Yn[Ny]);
         const double alpha = 3.0e14;              // 吸収係数 [1/m^3] (BPM-MATLAB 既定値)
         double power = 0;
         for (int iy = 0; iy < P->Ny; iy++) {
@@ -106,11 +174,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 long i = ix + (long)iy * P->Nx;
                 double xd = Xc[ix] - xc0;
                 double yd = Yc[iy] - yc0;
-                float amp = (float)exp(-(xd * xd + yd * yd) / (w0 * w0));
+                float amp = (float)(volt * exp(-(xd * xd + yd * yd) / (w0 * w0)));
                 floatcomplex e = {amp, 0.0f};
                 P->E1[i] = e;
                 power += (double)amp * amp;
-                double dist = MAX(0.0, MAX(fabs(xd) - xEdge, fabs(yd) - yEdge));
+                double dist = MAX(0.0, MAX(fabs(Xc[ix] - xmid) - xEdge, fabs(Yc[iy] - ymid) - yEdge));
                 P->multiplier[i] = (float)exp(-P->dz * dist * dist * alpha);
             }
         }
@@ -139,6 +207,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     sprintf(str, "lambda : %.6e [m], n_0 : %.4f", lambda, P->n_0);
     if (io) fprintf(fp, "%s\n", str);
     fprintf(stdout, "%s\n", str);
+    sprintf(str, "beam : w0 = %.6e [m], center = (%.6e, %.6e) [m]", w0, xc0, yc0);
+    if (io) fprintf(fp, "%s\n", str);
+    fprintf(stdout, "%s\n", str);
 
     // HDF5ファイルの作成
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
@@ -150,16 +221,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
 
         const double t0 = cputime();
 
-        // このスライスの屈折率分布を材料 ID から設定
+        // このスライスの複素屈折率分布を材料 ID から設定 (虚部 = 導電率による吸収)
         for (int iy = 0; iy < P->Ny; iy++)
         {
             for (int ix = 0; ix < P->Nx; ix++)
             {
                 long index = (long)(P->Nx * iy) + ix;
                 int64_t nn = NA(ix, iy, iz);
-                float ref_value = (float)sqrt(Material[iEx[nn]].epsr);
-                floatcomplex comp = {ref_value, 0.0f};
-                P->n_in[index] = comp;
+                P->n_in[index] = n_mat[iEx[nn]];
             }
         }
 
@@ -338,6 +407,28 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     H5Dclose(dataset_id);
     H5Sclose(dataspace_id);
 
+    // BPM パラメータの書き込み
+    {
+        const double n_0_d = P->n_0;
+        struct {
+            const char *name;
+            const double *value;
+        } bpm_metadata[] = {
+            {"lambda",  &lambda},
+            {"n_0",     &n_0_d},
+            {"beam_w0", &w0},
+            {"beam_x0", &xc0},
+            {"beam_y0", &yc0}
+        };
+        for (size_t i = 0; i < sizeof(bpm_metadata) / sizeof(bpm_metadata[0]); i++) {
+            dataspace_id = H5Screate(H5S_SCALAR);
+            dataset_id = H5Dcreate(metadata_group_id, bpm_metadata[i].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, bpm_metadata[i].value);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+    }
+
     // Planewaveの書き込み
     dataspace_id = H5Screate(H5S_SCALAR);
     dataset_id = H5Dcreate(metadata_group_id, "Planewave", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -433,6 +524,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     free(P->n_in);
     free(P->multiplier);
     free(P->b);
+    free(n_mat);
 
     return;
 }

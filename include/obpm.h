@@ -212,6 +212,13 @@ EXTERN struct {
 	double converg;           // convergence
 } Solver;                     // solver
 
+EXTERN struct {
+	double w0;                // gaussian beam waist (1/e^2 intensity radius) [m] (0 = auto)
+	double x0, y0;            // beam center [m]
+	int    center;            // 1 = beam center specified by input
+	double n0;                // reference refractive index (0 = auto)
+} BPM;                        // BPM (beam propagation method)
+
 typedef struct {
 	int jhy_x[2], khy_x[2], jhz_x[2], khz_x[2], numhy_x, numhz_x, ip[4];
 	int khz_y[2], ihz_y[2], khx_y[2], ihx_y[2], numhz_y, numhx_y, jp[4];
