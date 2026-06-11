@@ -16,22 +16,34 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 関数から?(fp の入替え?)
     hid_t file_id;
     // local
-    hid_t group_id, dataset_id, dataspace_id, memspace_id;
+    hid_t dataset_id, dataspace_id;
     herr_t status;
 
-    double fmax[] = {0, 0};
     char str[BUFSIZ];
-    int converged = 0;
 
-    // 加工
-    //ここから
+    // セルの幅（空間ステップ）を計算 (Xn/Yn/Zn は節点座標で要素数は Nx+1/Ny+1/Nz+1)
+    double Dx = (Xn[Nx] - Xn[0]) / Nx;
+    double Dy = (Yn[Ny] - Yn[0]) / Ny;
+    double Dz = (Zn[Nz] - Zn[0]) / Nz;
+    sprintf(str, "cell step : %.6e %.6e %.6e", Dx, Dy, Dz);
+    if (io) fprintf(fp, "%s\n", str);
+    fprintf(stdout, "%s\n", str);
+
+    // 波長 : OpenFDTD の周波数データ (frequency2 優先) から決定する
+    double lambda;
+    if      (NFreq2 > 0) lambda = SPEED_OF_LIGHT / Freq2[0];
+    else if (NFreq1 > 0) lambda = SPEED_OF_LIGHT / Freq1[0];
+    else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
+    const double k0 = (2 * PI) / lambda;
+
+    // BPM パラメータ (BPM-MATLAB の FDBPM に対応)
     struct parameters P_var;
     struct parameters *P = &P_var;
     P->Nx = Nx;
     P->Ny = Ny;
-    P->dx = 0.001; // x軸の区切りデータの1step幅
-    P->dy = 0.001; // y軸の区切りデータの1step幅
-    P->dz = 0.001; // z軸の区切りデータの1step幅
+    P->dx = (float)Dx; // x軸の区切りデータの1step幅
+    P->dy = (float)Dy; // y軸の区切りデータの1step幅
+    P->dz = (float)Dz; // z軸の区切りデータの1step幅
     P->iz_start = 0; // z軸の区切りデータ先頭(index)
     P->iz_end = Nz; // z軸の区切りデータ末尾(index)
     //enum symmetry : unsignate char
@@ -41,202 +53,143 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     //    AntiSymmetry (2)
     //  end
     //end
-    P->xSymmetry = 0; //NULL; //???(片側設定?)(enum値[0-2])(Array[1,1]?)
-    P->ySymmetry = 0; //NULL; //???(片側設定?)(enum値[0-2])(Array[1,1]?)
-    P->d = 0.0; //???
-    P->n_0 = 1.41; //[] reference refractive index
-    //P->n_in = Zin; //? //(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"n_mat"));
-	// input refractive index(Array)
-    P->n_in = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
+    P->xSymmetry = 0;
+    P->ySymmetry = 0;
 
-	//mwSize nDims = 2
-    //mwSize const *dimPtr = mxGetDimensions(mxGetField(prhs[1],0,"n_mat"));
-    // 違いが分からない(処理適用範囲?)
-    P->Nx_n = Nx; // 
-    P->Ny_n = Ny; // 
-    P->Nz_n = Nz; // nDims > 2? (long)dimPtr[2]: 1;
-    P->dz_n = Nz; // ?
-    //固定値?(ガウシアンビームの設定?)
-    //P.Lz = 5e-3;
-    //P.taperScaling = 0.15;
-    //P.twistRate = 2*pi/P.Lz;
-    P->taperPerStep = 0.0; //*(float *)mxGetData(mxGetField(prhs[1],0,"taperPerStep"));
-    P->twistPerStep = 0.0; //*(float *)mxGetData(mxGetField(prhs[1],0,"twistPerStep"));
-    P->rho_e = 0.0; // ?(Array)
-    P->RoC = 0.0; // ?(Array)
-    P->sinBendDirection = 0.0; // sin(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // y向き(rad)
-    P->cosBendDirection = 0.0; // cos(*(float *)mxGetData(mxGetField(prhs[1],0,"bendDirection"))/180*PI); // x向き(rad)
-    //初期電界入力?
-    //BPM-MATLAB ではコールバック関数の登録で対応
-    //P->E1 = NULL; // Input E field(Array)
+    // 参照屈折率 : 計算領域中心 (z=先頭スライス) の材料から取得する
+    {
+        int nn0 = NA(Nx / 2, Ny / 2, 0);
+        P->n_0 = (float)sqrt(Material[iEx[nn0]].epsr);
+    }
+
+    // 位相・損失係数 d = -dz*k0
+    P->d = (float)(-P->dz * k0);
+
+	// input refractive index(Array) : zスライス毎に材料 ID から更新する
+    P->n_in = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
+    // 屈折率分布はスライス毎の 2D 配列として与える
+    P->Nx_n = Nx;
+    P->Ny_n = Ny;
+    P->Nz_n = 1;
+    P->dz_n = P->dz;
+    P->taperPerStep = 0.0;
+    P->twistPerStep = 0.0;
+    P->rho_e = 0.0;
+    P->RoC = INFINITY;  // 直線導波路 (曲げ半径無限大)
+    P->sinBendDirection = 0.0;
+    P->cosBendDirection = 0.0;
+
+    // ADI 法の係数 ax = dz/(4i*dx^2*k0*n0), ay = dz/(4i*dy^2*k0*n0)
+    P->ax = -I * (float)(P->dz / (4 * P->dx * P->dx * k0 * P->n_0));
+    P->ay = -I * (float)(P->dz / (4 * P->dy * P->dy * k0 * P->n_0));
+
+    // 電界バッファ
 	P->E1 = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
 	P->E2 = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex));
-    //結果格納?
     P->Efinal = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); // Output E field(Array)
     P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); //Output refractive index(Array)
-    //ガウシアンビームの出力値?
-    P->precisePower = 10.0; // (float)mxGetScalar(mxGetField(prhs[1],0,"inputPrecisePower"));
-    //P->multiplier = NULL; // Array of multiplier values to apply to the E field after each step, due to the edge absorber outside the main simulation window
 	P->multiplier = (float *)malloc((P->Nx * P->Ny)*sizeof(float));
-    //P->ax = floatcomplex{0.0,0.0}; //*(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"ax"));
-    //P->ay = floatcomplex{0.0,0.0}; //*(floatcomplex *)mxGetData(mxGetField(prhs[1],0,"ay"));
+
+    // 初期電界 (ガウシアンビーム) と端部吸収体 (multiplier) の設定
+    {
+        const double xc0 = 0.5 * (Xn[0] + Xn[Nx]);
+        const double yc0 = 0.5 * (Yn[0] + Yn[Ny]);
+        const double Lx = Xn[Nx] - Xn[0];
+        const double Ly = Yn[Ny] - Yn[0];
+        const double w0 = 0.25 * MIN(Lx, Ly);     // ビームウェスト
+        const double xEdge = 0.45 * Lx;           // 吸収体開始位置 (中心からの距離)
+        const double yEdge = 0.45 * Ly;
+        const double alpha = 3.0e14;              // 吸収係数 [1/m^3] (BPM-MATLAB 既定値)
+        double power = 0;
+        for (int iy = 0; iy < P->Ny; iy++) {
+            for (int ix = 0; ix < P->Nx; ix++) {
+                long i = ix + (long)iy * P->Nx;
+                double xd = Xc[ix] - xc0;
+                double yd = Yc[iy] - yc0;
+                float amp = (float)exp(-(xd * xd + yd * yd) / (w0 * w0));
+                floatcomplex e = {amp, 0.0f};
+                P->E1[i] = e;
+                power += (double)amp * amp;
+                double dist = MAX(0.0, MAX(fabs(xd) - xEdge, fabs(yd) - yEdge));
+                P->multiplier[i] = (float)exp(-P->dz * dist * dist * alpha);
+            }
+        }
+        P->precisePower = power;
+    }
 
     P->EfieldPower = 0;
     P->precisePowerDiff = 0;
     #ifdef _OPENMP
-    bool useAllCPUs = false; //mxIsLogicalScalarTrue(mxGetField(prhs[1],0,"useAllCPUs"));
+    bool useAllCPUs = false;
     long numThreads = useAllCPUs || omp_get_num_procs() == 1? omp_get_num_procs(): omp_get_num_procs()-1;
     #else
     long numThreads = 1;
     #endif
     P->b = (floatcomplex *)malloc(numThreads*MAX(P->Nx,P->Ny)*sizeof(floatcomplex));
-    #ifdef _OPENMP
-    #pragma omp parallel num_threads(useAllCPUs || omp_get_num_procs() == 1? omp_get_num_procs(): omp_get_num_procs()-1)
-    #endif
+
+    // 解放時の二重 free 防止用 (swapEPointers でポインタが入れ替わるため)
+    floatcomplex *E_in = P->E1;
+    floatcomplex *E_buf = P->E2;
 
     fprintf(stdout, "initfield\n");
 
     // initial field
     initfield();
 
-    // 温度配列の初期化
-    //int Nx = 100, Ny = 100, Nz = 100;
-    double alpha = 0.01;  // 熱拡散係数
-    //double *T = (double *)malloc(Nx * Ny * Nz * sizeof(double));
-    //double *P_loss = (double *)malloc(Nx * Ny * Nz * sizeof(double));
-    //memset(T, 0, Nx * Ny * Nz * sizeof(double));
-    //memset(P_loss, 0, Nx * Ny * Nz * sizeof(double));
-    //NN
-    double *T = (double *)malloc(NFreq2 * NN * sizeof(double));
-    double *P_losses = (double *)malloc(NFreq2 * NN * sizeof(double));
-    memset(T, 0, NFreq2 * NN * sizeof(double));
-    memset(P_losses, 0, NFreq2 * NN * sizeof(double));
-
-    // セルの幅（空間ステップ）を計算
-    double Dx = Xn[Nx-1] - Xn[0] / Nx;
-    double Dy = Yn[Ny-1] - Yn[0] / Ny;
-    double Dz = Zn[Nz-1] - Zn[0] / Nz;
-    sprintf(str, "%.6f %.6f %.6f", Dx, Dy, Dz);
-    fprintf(stdout, "cell step : %s\n", str);
+    sprintf(str, "lambda : %.6e [m], n_0 : %.4f", lambda, P->n_0);
+    if (io) fprintf(fp, "%s\n", str);
+    fprintf(stdout, "%s\n", str);
 
     // HDF5ファイルの作成
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
-    // time step iteration
-    int itime;
-    double t = 0;
-    //double sigma = 1e3;      // 導電率 [S/m]（適宜変更）
-    int material_id = 0; // 使用したい材料のIDを設定
-    //double sigma = get_conductivity(material_id);
-    //double epsr = get_relative_permittivity(material_id);
-    //double amur = get_relative_permeability(material_id);
-    double mu_double_prime = 1e-3; // 磁気損失係数 [H/m]（適宜変更）
-    //double frequency = 200e12;      // 周波数 [Hz]（適宜変更）
-    //double omega = 2 * M_PI * frequency; // 角周波数 [rad/s]
-    for (itime = 0; itime <= Solver.maxiter; itime++) 
-    {
-        //Step 時間の対応ではなく、Z軸の変化を元に対応していく。
-        for(long iz = P->iz_start; iz < P->iz_end; iz++) {
-            sprintf(str, "itime : %d, iz : %d", itime, iz);
-            fprintf(stdout, "%s\n", str);
+    // BPM は時間反復ではなく Z 軸方向に 1 回伝搬する
+    for(long iz = P->iz_start; iz < P->iz_end; iz++) {
+        sprintf(str, "step iz : %ld / %ld", iz + 1, (long)Nz);
+        fprintf(stdout, "%s\n", str);
 
-            const double t0 = cputime();
+        const double t0 = cputime();
 
-            // 反射強度フィールドデータセットの作成と設定
-            sprintf(str, "set Refractive");
-            fprintf(stdout, "%s\n", str);
-            for (int iy = 0; iy < P->Ny; iy++)
+        // このスライスの屈折率分布を材料 ID から設定
+        for (int iy = 0; iy < P->Ny; iy++)
+        {
+            for (int ix = 0; ix < P->Nx; ix++)
             {
-                for (int ix = 0; ix < P->Nx; ix++)
-                {
-                    int index =  (P->Nx * iy) + ix;
-                    int nn = NA(ix,iy,iz);
-                    double ref_value[1] = { sqrt(Material[iEx[nn]].epsr) };
-                    floatcomplex comp = {ref_value[1], 0.0};
-                    P->n_in[index] = comp;
-                }
+                long index = (long)(P->Nx * iy) + ix;
+                int64_t nn = NA(ix, iy, iz);
+                float ref_value = (float)sqrt(Material[iEx[nn]].epsr);
+                floatcomplex comp = {ref_value, 0.0f};
+                P->n_in[index] = comp;
             }
-
-            //z軸を起点とした電界情報(E)を取得
-            ElectricFieldProfile profile;
-            profile.setLx(2.0);
-            profile.setLy(3.0);
-            //profile.setField
-            profile.setLabel("Test Label");
-
-            // Example usage of initializeRIfromFunction
-            //std::function<std::complex<float>(const MatrixXf&, const MatrixXf&, const std::vector<std::complex<float>> &)> hFunc = [](const MatrixXf& X, const MatrixXf& Y, const std::vector<std::complex<float>> &nParams) -> MatrixXf {
-            //    return X + Y + nParams[0].real();
-            //};
-
-            //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
-            //profile.initializeRIfromFunction(hFunc, nParameters);
-            
-            //model.electricFieldProfile = profile;
-            //z軸を起点とした屈折率情報(RI)を取得
-            //RefractiveIndexProfile profile2;
-            //profile2.setLx(2.0);
-            //profile2.setLy(3.0);
-            //BPMMatlab.model.refectiveIndexProfile.xSymmetry = None
-            //BPMMatlab.model.refectiveIndexProfile.ySymmetry = None
-
-            // Example usage of initializeRIfromFunction
-            //std::function<std::complex<float>(float, float, float, const std::vector<std::complex<float>> &)> hFunc = [](float x, float y, float z, const std::vector<std::complex<float>> &nParams) -> std::complex<float> {
-            //    return std::complex<float>(x + y + z + nParams[0].real(), 0.0f);
-            //};
-            //std::vector<std::complex<float>> nParameters = {std::complex<float>(1.5, 0.0)};
-            //profile2.initializeRIfromFunction(hFunc, nParameters, 5);
-
-            //model.refectiveIndexProfile = profile2;
-            
-            //2D対応
-            //3D対応?
-            sprintf(str, "substep1a");
-            fprintf(stdout, "%s\n", str);
-            substep1a(P);
-            sprintf(str, "substep1b");
-            fprintf(stdout, "%s\n", str);
-            substep1b(P);
-            sprintf(str, "substep2a");
-            fprintf(stdout, "%s\n", str);
-            substep2a(P);
-            sprintf(str, "substep2b");
-            fprintf(stdout, "%s\n", str);
-            substep2b(P);
-            sprintf(str, "applyMultiplier");
-            fprintf(stdout, "%s\n", str);
-            applyMultiplier(P,iz,NULL);
-
-            #ifdef _OPENMP
-            #pragma omp master
-            #endif
-            {
-                if(iz+1 < P->iz_end) swapEPointers(P,iz);
-                updatePrecisePower(P);
-            }
-            #ifdef _OPENMP
-            #pragma omp barrier
-            #endif
-
-            *tdft += cputime() - t0;
         }
-    	//格納?
-	    //P->Efinal = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); // Output E field(Array)
-	    //P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); //Output refractive index(Array)
 
-        // Niterを増加
-        Niter++;
+        // Douglas-Gunn ADI 法による 1 ステップ伝搬
+        #ifdef _OPENMP
+        #pragma omp parallel num_threads(numThreads)
+        #endif
+        {
+            substep1a(P);
+            substep1b(P);
+            substep2a(P);
+            substep2b(P);
+            applyMultiplier(P, iz, NULL);
+        }
+
+        if(iz+1 < P->iz_end) swapEPointers(P,iz);
+        updatePrecisePower(P);
+
+        *tdft += cputime() - t0;
     }
-    // メモリの解放
-    free(T);
-    free(P_losses);
 
-    // メモリスペース、データセットとデータスペースのクローズ
-    status = H5Sclose(memspace_id);
+    // 最終電界を Efinal へ格納
+    if (P->E2 != P->Efinal) {
+        memcpy(P->Efinal, P->E2, P->Nx * P->Ny * sizeof(floatcomplex));
+    }
 
     // result
     if (io) {
-        sprintf(str, "    --- %s ---", (converged ? "converged" : "max steps"));
+        sprintf(str, "    --- propagated %ld steps, output power = %.6e ---",
+                (long)(P->iz_end - P->iz_start), P->precisePower);
         fprintf(fp,     "%s\n", str);
         fprintf(stdout, "%s\n", str);
         fflush(fp);
@@ -244,7 +197,37 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     }
 
     // time steps
-    Ntime = itime + converged;
+    Ntime = 1;
+
+    // 結果 (最終電界・屈折率分布) の書き込み
+    {
+        hid_t field_group_id = H5Gcreate(file_id, "/field", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        hsize_t field_dims[2] = {(hsize_t)P->Ny, (hsize_t)P->Nx};
+        float *tmp = (float *)malloc(P->Nx * P->Ny * sizeof(float));
+        struct {
+            const char *name;
+            floatcomplex *data;
+            int imagpart;
+        } field_data[] = {
+            {"Efinal_r", P->Efinal, 0},
+            {"Efinal_i", P->Efinal, 1},
+            {"n_out_r",  P->n_out,  0},
+            {"n_out_i",  P->n_out,  1}
+        };
+        for (size_t n = 0; n < sizeof(field_data) / sizeof(field_data[0]); n++) {
+            for (long i = 0; i < P->Nx * P->Ny; i++) {
+                tmp[i] = field_data[n].imagpart ? CIMAGF(field_data[n].data[i])
+                                                : CREALF(field_data[n].data[i]);
+            }
+            dataspace_id = H5Screate_simple(2, field_dims, NULL);
+            dataset_id = H5Dcreate(field_group_id, field_data[n].name, H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmp);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        free(tmp);
+        H5Gclose(field_group_id);
+    }
 
     // メタデータの作成
     hid_t metadata_group_id = H5Gcreate(file_id, "/metadata", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -385,7 +368,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         {"Gline", reinterpret_cast<double*>(Gline), NGline * 2 * 3}
     };
 
-    for (int i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
+    for (size_t i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
+        if ((arrays[i].size == 0) || (arrays[i].data == NULL)) continue;
         hsize_t array_dims[1] = {arrays[i].size};
         dataspace_id = H5Screate_simple(1, array_dims, NULL);
         dataset_id = H5Dcreate(metadata_group_id, arrays[i].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -412,12 +396,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     H5Tinsert(memtype, "z", HOFFSET(surface_t, z), H5T_NATIVE_DOUBLE);
     H5Tinsert(memtype, "ds", HOFFSET(surface_t, ds), H5T_NATIVE_DOUBLE);
 
-    hsize_t surface_dims[1] = {NSurface};
-    dataspace_id = H5Screate_simple(1, surface_dims, NULL);
-    dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, memtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
+    if ((NSurface > 0) && (Surface != NULL)) {
+        hsize_t surface_dims[1] = {(hsize_t)NSurface};
+        dataspace_id = H5Screate_simple(1, surface_dims, NULL);
+        dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        status = H5Dwrite(dataset_id, memtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
+        H5Dclose(dataset_id);
+        H5Sclose(dataspace_id);
+    }
     H5Tclose(memtype);
 
     // メタデータグループのクローズ
@@ -428,11 +414,26 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // free
     memfree2();
 
-    //if(P->E1 != mxGetData(prhs[0]) && P->E1 != P->Efinal) free(P->E1); // Part of the reason for checking this is to properly handle ctrl-c cases
+    // swapEPointers でポインタが入れ替わるため、重複を除外して解放する
+    {
+        floatcomplex *bufs[] = {E_in, E_buf, P->E1, P->E2, P->Efinal};
+        const int nbuf = sizeof(bufs) / sizeof(bufs[0]);
+        for (int i = 0; i < nbuf; i++) {
+            int duplicated = 0;
+            for (int j = 0; j < i; j++) {
+                if (bufs[j] == bufs[i]) {
+                    duplicated = 1;
+                    break;
+                }
+            }
+            if (!duplicated && (bufs[i] != NULL)) free(bufs[i]);
+        }
+    }
+    free(P->n_out);
+    free(P->n_in);
+    free(P->multiplier);
     free(P->b);
 
-	double *outputPrecisePowerPtr = NULL; //(double *)mxGetData(plhs[2] = mxCreateDoubleMatrix(1,1,mxREAL));
-    *outputPrecisePowerPtr = P->precisePower;
     return;
 }
 

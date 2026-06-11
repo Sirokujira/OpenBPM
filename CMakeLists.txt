@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18.3)
 
 project(openBPM
   DESCRIPTION "A free and open source BPM solver"
-  LANGUAGES C CXX CUDA)
+  LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -14,6 +14,7 @@ find_package (Eigen3 3.3 REQUIRED)
 # CUDA を使用するかどうかを設定するオプションを追加
 option(WITH_CUDA "Enable CUDA support" OFF)
 if(WITH_CUDA)
+    enable_language(CUDA)
     #set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
     message(STATUS ${CMAKE_CUDA_COMPILER})
     message(STATUS ${CMAKE_CUDA_HOST_COMPILER})

@@ -28,9 +28,9 @@
 
     //typedef float complex floatcomplex;
     typedef float _Complex floatcomplex;
-    //#define I (1.0f * _Complex_I)
-    // 手動で虚数単位を定義
-    #define I ((float _Complex) 0.0f + 1.0f * (float _Complex) 1.0f)
+    // 虚数単位 (GCC 拡張の虚数定数。キャストでは虚数単位にならないことに注意)
+    #undef I
+    #define I (__extension__ 1.0fi)
     #define CEXPF(x) (cexpf(x))
     #define CREALF(x) (crealf(x))
     #define CIMAGF(x) (cimagf(x))

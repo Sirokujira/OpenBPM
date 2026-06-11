@@ -50,3 +50,12 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Build outputs
+build/
+bin/
+
+# Simulation outputs
+obpm.log
+time_series_data.h5
+*.h5

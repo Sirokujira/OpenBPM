@@ -1,0 +1,29 @@
+# OpenBPM sample : step-index square-core optical waveguide
+# wavelength = 1.55um (frequency = 1.934e14 Hz)
+# core   : 4um x 4um, n = 1.450 (epsr = 2.102500)
+# clad   :             n = 1.444 (epsr = 2.085136)
+OpenBPM 2 2
+title = step-index waveguide (BPM sample)
+
+xmesh = -10e-6 60 10e-6
+ymesh = -10e-6 60 10e-6
+zmesh = 0 100 100e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>  (id starts at 2)
+material = 1 2.085136 0 1 0
+material = 1 2.102500 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -10e-6 10e-6 -10e-6 10e-6 0 100e-6
+geometry = 3 1 -2e-6 2e-6 -2e-6 2e-6 0 100e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+frequency1 = 1.93414489e14 1.93414489e14 0
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end
