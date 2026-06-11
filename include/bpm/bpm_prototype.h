@@ -9,14 +9,19 @@
 #ifdef __NVCC__
   #include <thrust/complex.h>
   typedef thrust::complex<float> floatcomplex;
+  #undef I
   #define I thrust::complex<float>{0,1}
   #define CEXPF(x) (thrust::exp(x))
   #define CREALF(x) (x.real())
   #define CIMAGF(x) (x.imag())
-  #define MAX(x,y) (max(x,y))
-  #define MIN(x,y) (min(x,y))
+  // obpm.h が定義済みの場合はそちらを使用する (ホスト/デバイス両対応)
+  #ifndef MAX
+    #define MAX(x,y) (max(x,y))
+  #endif
+  #ifndef MIN
+    #define MIN(x,y) (min(x,y))
+  #endif
   #define FLOORF(x) (floor(x))
-  #include <nvml.h>
   #define TILE_DIM 32
 #else
   #ifdef __GNUC__ // This is defined for GCC and CLANG but not for Microsoft Visual C++ compiler
@@ -94,6 +99,19 @@ struct parameters {
   float EfieldPower;
 };
 
+#ifdef __CUDACC__
+
+// CUDA カーネル (bpm/FDBPMpropagator.cu)
+__global__ void substep1a(struct parameters *);
+__global__ void substep1b(struct parameters *);
+__global__ void substep2a(struct parameters *);
+__global__ void substep2b(struct parameters *);
+__global__ void applyMultiplier(struct parameters *, long, struct debug*);
+__global__ void swapEPointers(struct parameters *, long);
+__global__ void updatePrecisePower(struct parameters *);
+
+#else
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -108,6 +126,8 @@ extern void updatePrecisePower(struct parameters *);
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif
 
 //extern void applyMultiplier(struct parameters *, long, struct debug*);

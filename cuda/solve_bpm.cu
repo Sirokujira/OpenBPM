@@ -1,636 +1,497 @@
 /*
-solve.cu (CUDA)
+solve_bpm.cu (CUDA)
+
+BPM ソルバー (Douglas-Gunn ADI 法, bpm/FDBPMpropagator.cu の CUDA カーネルを使用)
+sol/solve_bpm.cpp の CUDA 版
 */
 
 #include "obpm.h"
 #include "obpm_cuda.h"
 #include "obpm_prototype.h"
 
-
 #include "hdf5.h"
 #define FILE_NAME "time_series_data.h5"
 
 #include "bpm/bpm_prototype.h"
 
-static void copy_to_host();
-
-void solve(int io, double *tdft, FILE *fp)
+static void cuda_check(cudaError_t code, const char *file, int line)
 {
-    // HDF5ファイルの作成
-    // 関数から?(fp の入替え?)
-    hid_t file_id;
-    // local
-    hid_t group_id, dataset_id, dataspace_id, memspace_id;
-    herr_t status;
-
-    double fmax[] = {0, 0};
-    char   str[BUFSIZ];
-    int    converged = 0;
-
-    // setup host memory
-    setup_host();
-
-    // setup (GPU)
-    if (GPU) {
-        setup_gpu();
-    }
-
-    // initial field
-    initfield();
-
-    // HDF5ファイルの作成
-    file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
-
-    // time step iteration
-    int itime;
-    double t = 0;
-
-    int lx = (iABC == 0) ? 1 : (iABC == 1) ? cPML.l : 0;
-    int ly = (iABC == 0) ? 1 : (iABC == 1) ? cPML.l : 0;
-    int lz = (iABC == 0) ? 1 : (iABC == 1) ? cPML.l : 0;
-
-    for (itime = 0; itime <= Solver.maxiter; itime++) {
-
-        // update H
-        t += 0.5 * Dt;
-        updateHx(t);
-        updateHy(t);
-        updateHz(t);
-
-        // ABC H
-        if      (iABC == 0) {
-            murH(numMurHx, (GPU ? d_fMurHx : fMurHx), Hx);
-            murH(numMurHy, (GPU ? d_fMurHy : fMurHy), Hy);
-            murH(numMurHz, (GPU ? d_fMurHz : fMurHz), Hz);
-        }
-        else if (iABC == 1) {
-            pmlHx();
-            pmlHy();
-            pmlHz();
-        }
-
-        // PBC H
-        if (PBCx) {
-            pbcx();
-        }
-        if (PBCy) {
-            pbcy();
-        }
-        if (PBCz) {
-            pbcz();
-        }
-
-        // update E
-        t += 0.5 * Dt;
-        updateEx(t);
-        updateEy(t);
-        updateEz(t);
-
-        // dispersion E
-        if (numDispersionEx) {
-            dispersionEx(t);
-        }
-        if (numDispersionEy) {
-            dispersionEy(t);
-        }
-        if (numDispersionEz) {
-            dispersionEz(t);
-        }
-
-        // ABC E
-        if      (iABC == 1) {
-            pmlEx();
-            pmlEy();
-            pmlEz();
-        }
-
-        // feed
-        if (NFeed) {
-            efeed(itime);
-        }
-
-        // inductor
-        if (NInductor) {
-            eload();
-        }
-
-        // point
-        if (NPoint) {
-            vpoint(itime);
-        }
-
-        // DFT
-        if (GPU) cudaDeviceSynchronize();
-        const double t0 = cputime();
-        dftNear3d(itime);
-        if (GPU) cudaDeviceSynchronize();
-        *tdft += cputime() - t0;
-
-        // average and convergence
-        if ((itime % Solver.nout == 0) || (itime == Solver.maxiter)) {
-            // average
-            double fsum[2];
-            average(fsum);
-
-            // average (plot)
-            Eiter[Niter] = fsum[0];
-            Hiter[Niter] = fsum[1];
-            //Niter++;
-
-            // monitor
-            if (io) {
-                sprintf(str, "%7d %.6f %.6f", itime, fsum[0], fsum[1]);
-                fprintf(fp,     "%s\n", str);
-                fprintf(stdout, "%s\n", str);
-                fflush(fp);
-                fflush(stdout);
-
-                // copy near3d from device to host
-                memcopy3_gpu();
-
-                // 各時間ステップごとにグループを作成
-                char group_name[32];
-                snprintf(group_name, sizeof(group_name), "/data%06d", itime);
-                group_id = H5Gcreate(file_id, group_name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                //sprintf(str, "group_name : %s", group_name);
-                //fprintf(stdout, "%s\n", str);
-
-                // Eフィールドデータセットの作成と書き込み
-                hsize_t e_dims[4] = {1, NFreq2, NN, 6};
-                //hsize_t e_dims[4] = {1, NFreq2, Nx*Ny*Nz, 6};
-                dataspace_id = H5Screate_simple(4, e_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "E", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims[1] = {6};
-                memspace_id = H5Screate_simple(1, mem_dims, NULL);
-
-                //sprintf(str, "NFreq2 : %d", NFreq2);
-                //fprintf(stdout, "%s\n", str);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        //fprintf(stdout, "set e_value.\n");
-
-                        double e_value[6] = {
-                            cEx_r[n0 + nn], cEy_r[n0 + nn], cEz_r[n0 + nn],
-                            cEx_i[n0 + nn], cEy_i[n0 + nn], cEz_i[n0 + nn]
-                        };
-
-                        hsize_t e_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t e_count[4] = {1, 1, 1, 6};
-                        //fprintf(stdout, "H5Sselect_hyperslab.\n");
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, e_offset, NULL, e_count, NULL);
-
-                        // 書き込み
-                        //fprintf(stdout, "H5Dwrite.\n");
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, e_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing E data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-
-                    /*
-                    //Nx
-                    int datacount = 0;
-                    //for (int x = iMin + lx; x <= iMax - lx; x++)
-                    for (int x = iMin; x < iMax; x++)
-                    {
-                        //Ny
-                        //for (int y = jMin - ly; y <= jMax + ly; y++)
-                        for (int y = jMin; y < jMax; y++)
-                        {
-                            //Ny
-                            //for (int z = kMin + lz; z <= kMax - lz; z++)
-                            for (int z = kMin; z < kMax; z++)
-                            {
-                                //境界線の対応は間引く
-                                int nn = NA(x, y, z);
-                                //printf("%d.\", nn)
-                                //sprintf(str, "%7d", nn);
-                                //fprintf(stdout, "%s\n", str);
-                                double e_value[6] = {
-                                    cEx_r[n0 + nn], cEy_r[n0 + nn], cEz_r[n0 + nn],
-                                    cEx_i[n0 + nn], cEy_i[n0 + nn], cEz_i[n0 + nn]
-                                };
-
-                                hsize_t e_offset[4] = {0, ifreq, datacount, 0};
-                                hsize_t e_count[4] = {1, 1, 1, 6};
-                                //fprintf(stdout, "H5Sselect_hyperslab.\n");
-                                H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, e_offset, NULL, e_count, NULL);
-
-                                // 書き込み
-                                //fprintf(stdout, "H5Dwrite.\n");
-                                status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, e_value);
-                                if (status < 0) {
-                                    fprintf(stderr, "Error writing E data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                                }
-                                datacount++;
-                            }
-                        }
-                    }
-                    */
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // Hフィールドデータセットの作成と書き込み
-                hsize_t h_dims[4] = {1, NFreq2, NN, 6};
-                dataspace_id = H5Screate_simple(4, h_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "H", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double h_value[6] = {
-                            cHx_r[n0 + nn], cHy_r[n0 + nn], cHz_r[n0 + nn],
-                            cHx_i[n0 + nn], cHy_i[n0 + nn], cHz_i[n0 + nn]
-                        };
-
-                        hsize_t h_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t h_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, h_offset, NULL, h_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, h_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // 複素数用のHDF5データ型を定義
-                hid_t complex_datatype = H5Tcreate(H5T_COMPOUND, sizeof(d_complex_t));
-                H5Tinsert(complex_datatype, "real", HOFFSET(d_complex_t, r), H5T_NATIVE_DOUBLE);
-                H5Tinsert(complex_datatype, "imag", HOFFSET(d_complex_t, i), H5T_NATIVE_DOUBLE);
-
-                // Surfaceフィールドデータセットの作成と書き込み
-                hsize_t surf_dims[4] = {1, NFreq2, NN, 6};
-                dataspace_id = H5Screate_simple(4, surf_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "Surface", complex_datatype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    //int64_t surf0 = ifreq * NSurface;
-                    for (int surf = 0; surf < NSurface; surf++) {
-                        d_complex_t surf_value[6] = {
-                            SurfaceEx[ifreq][surf], SurfaceEy[ifreq][surf], SurfaceEz[ifreq][surf],
-                            SurfaceHx[ifreq][surf], SurfaceHy[ifreq][surf], SurfaceHz[ifreq][surf]
-                        };
-
-                        hsize_t surf_offset[4] = {0, ifreq, surf, 0};
-                        hsize_t surf_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, surf_offset, NULL, surf_count, NULL);
-                        status = H5Dwrite(dataset_id, complex_datatype, memspace_id, dataspace_id, H5P_DEFAULT, surf_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d, surf=%d\n", itime, ifreq, surf);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // Pフィールドデータセットの作成と書き込み（仮の例）
-                hsize_t p_dims[4] = {1, NFreq2, NN, 3};
-                dataspace_id = H5Screate_simple(4, p_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "P", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims2[1] = {3};
-                memspace_id = H5Screate_simple(1, mem_dims2, NULL);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double p_value[3] = {
-                            cEx_r[n0 + nn] * cHy_r[n0 + nn] - cEy_r[n0 + nn] * cHx_r[n0 + nn],
-                            cEy_r[n0 + nn] * cEz_r[n0 + nn] - cEz_r[n0 + nn] * cHy_r[n0 + nn],
-                            cEz_r[n0 + nn] * cHx_r[n0 + nn] - cEx_r[n0 + nn] * cEz_r[n0 + nn]
-                        };
-
-                        hsize_t p_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t p_count[4] = {1, 1, 1, 3};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, p_offset, NULL, p_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, p_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing P data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-                // グループのクローズ
-                H5Gclose(group_id);
-            }
-
-            // check convergence
-            fmax[0] = MAX(fmax[0], fsum[0]);
-            fmax[1] = MAX(fmax[1], fsum[1]);
-            if ((fsum[0] < fmax[0] * Solver.converg) &&
-                (fsum[1] < fmax[1] * Solver.converg)) {
-                converged = 1;
-                break;
-            }
-            
-            // Niterを増加
-            Niter++;
-        }
-    }
-
-    // メモリスペース、データセットとデータスペースのクローズ
-    status = H5Sclose(memspace_id);
-
-    // result
-    if (io) {
-        sprintf(str, "    --- %s ---", (converged ? "converged" : "max steps"));
-        fprintf(fp,     "%s\n", str);
-        fprintf(stdout, "%s\n", str);
-        fflush(fp);
-        fflush(stdout);
-    }
-
-    // time steps
-    Ntime = itime + converged;
-
-    // copy point from device to host
-    if (GPU) {
-        copy_to_host();
-    }
-
-    // メタデータの作成
-    hid_t metadata_group_id = H5Gcreate(file_id, "/metadata", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-    //sprintf(str, "group_name : %s", group_name);
-    fprintf(stdout, "meta1.\n");
-
-    // 時間に関するメタデータの書き込み
-    double time_metadata[1] = {Solver.maxiter * Dt};
-    //dataspace_id = H5Screate_simple(1, count, NULL);
-    hsize_t time_count[1] = {1};
-    dataspace_id = H5Screate_simple(1, time_count, NULL);
-    dataset_id = H5Dcreate(metadata_group_id, "time", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, time_metadata);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-
-    // グリッドに関するメタデータの書き込み
-    //double grid_metadata[3] = {Xn, Yn, Zn};
-    //hsize_t grid_count[1] = {3};
-    //dataspace_id = H5Screate_simple(1, grid_count, NULL);
-    //dataset_id = H5Dcreate(metadata_group_id, "grid", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    //status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, grid_metadata);
-    //H5Dclose(dataset_id);
-    //H5Sclose(dataspace_id);
-
-    // Title
-    fprintf(stdout, "meta2.\n");
-    hsize_t title_dims[1] = {256};
-    dataspace_id = H5Screate_simple(1, title_dims, NULL);
-    dataset_id = H5Dcreate(metadata_group_id, "Title", H5T_NATIVE_CHAR, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_CHAR, H5S_ALL, H5S_ALL, H5P_DEFAULT, Title);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-
-    fprintf(stdout, "meta3.\n");
-    // 各種整数型メタデータの書き込み
-    struct {
-        const char *name;
-        void *value;
-        hid_t type;
-    } metadata[] = {
-        {"Nx", &Nx, H5T_NATIVE_INT},
-        {"Ny", &Ny, H5T_NATIVE_INT},
-        {"Nz", &Nz, H5T_NATIVE_INT},
-        {"Ni", &Ni, H5T_NATIVE_INT},
-        {"Nj", &Nj, H5T_NATIVE_INT},
-        {"Nk", &Nk, H5T_NATIVE_INT},
-        {"N0", &N0, H5T_NATIVE_INT},
-        {"NN", &NN, H5T_NATIVE_INT64},
-        //境界線領域対応
-        {"lx", &lx, H5T_NATIVE_INT},
-        {"ly", &ly, H5T_NATIVE_INT},
-        {"lz", &lz, H5T_NATIVE_INT},
-        {"NFreq1", &NFreq1, H5T_NATIVE_INT},
-        {"NFreq2", &NFreq2, H5T_NATIVE_INT},
-        {"NFeed", &NFeed, H5T_NATIVE_INT},
-        {"NPoint", &NPoint, H5T_NATIVE_INT},
-        {"Niter", &Niter, H5T_NATIVE_INT},
-        {"Ntime", &Ntime, H5T_NATIVE_INT},
-        {"Solver_maxiter", &Solver.maxiter, H5T_NATIVE_INT},
-        {"Solver_nout", &Solver.nout, H5T_NATIVE_INT},
-        {"NGline", &NGline, H5T_NATIVE_INT},
-        {"IPlanewave", &IPlanewave, H5T_NATIVE_INT}
-    };
-
-    for (int i = 0; i < sizeof(metadata) / sizeof(metadata[0]); i++) {
-        dataspace_id = H5Screate(H5S_SCALAR);
-        dataset_id = H5Dcreate(metadata_group_id, metadata[i].name, metadata[i].type, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-        status = H5Dwrite(dataset_id, metadata[i].type, H5S_ALL, H5S_ALL, H5P_DEFAULT, metadata[i].value);
-        H5Dclose(dataset_id);
-        H5Sclose(dataspace_id);
-    }
-
-    fprintf(stdout, "meta4.\n");
-    // Dtの書き込み
-    dataspace_id = H5Screate(H5S_SCALAR);
-    dataset_id = H5Dcreate(metadata_group_id, "Dt", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &Dt);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-
-    fprintf(stdout, "meta5.\n");
-    // Planewaveの書き込み
-    dataspace_id = H5Screate(H5S_SCALAR);
-    dataset_id = H5Dcreate(metadata_group_id, "Planewave", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &Planewave);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-
-    fprintf(stdout, "meta6.\n");
-    // 配列データの書き込み
-    struct {
-        const char *name;
-        double *data;
-        size_t size;
-    } arrays[] = {
-        {"Xn", Xn, Nx + 1},
-        {"Yn", Yn, Ny + 1},
-        {"Zn", Zn, Nz + 1},
-        {"Xc", Xc, Nx},
-        {"Yc", Yc, Ny},
-        {"Zc", Zc, Nz},
-        {"Eiter", Eiter, Niter},
-        {"Hiter", Hiter, Niter},
-        {"VFeed", VFeed, NFeed * (Solver.maxiter + 1)},
-        {"IFeed", IFeed, NFeed * (Solver.maxiter + 1)},
-        {"VPoint", VPoint, NPoint * (Solver.maxiter + 1)},
-        {"Freq1", Freq1, NFreq1},
-        {"Freq2", Freq2, NFreq2},
-        //{"Gline", Gline, NGline * 2 * 3}
-        {"Gline", reinterpret_cast<double*>(Gline), NGline * 2 * 3}
-    };
-
-    for (int i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
-        fprintf(stdout, "meta6 1(%d)(%s).\n", i, arrays[i].name);
-        hsize_t array_dims[1] = {arrays[i].size};
-        dataspace_id = H5Screate_simple(1, array_dims, NULL);
-        dataset_id = H5Dcreate(metadata_group_id, arrays[i].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, arrays[i].data);
-        H5Dclose(dataset_id);
-        H5Sclose(dataspace_id);
-    }
-    
-    fprintf(stdout, "meta7.\n");
-    // Surfaceデータの書き込み
-    dataspace_id = H5Screate(H5S_SCALAR);
-    dataset_id = H5Dcreate(metadata_group_id, "NSurface", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &NSurface);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-
-    // surface_t構造体に対応する複合データ型を定義
-    hid_t memtype = H5Tcreate(H5T_COMPOUND, sizeof(surface_t));
-    H5Tinsert(memtype, "nx", HOFFSET(surface_t, nx), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ny", HOFFSET(surface_t, ny), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "nz", HOFFSET(surface_t, nz), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "x", HOFFSET(surface_t, x), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "y", HOFFSET(surface_t, y), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "z", HOFFSET(surface_t, z), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ds", HOFFSET(surface_t, ds), H5T_NATIVE_DOUBLE);
-
-    hsize_t surface_dims[1] = {NSurface};
-    dataspace_id = H5Screate_simple(1, surface_dims, NULL);
-    dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-    H5Tclose(memtype);
-
-    fprintf(stdout, "meta8.\n");
-    // Refrection データの書き込み
-    //dataspace_id = H5Screate(H5S_SCALAR);
-    //dataset_id = H5Dcreate(metadata_group_id, "iEx", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    //status = H5Dwrite(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &iEx);
-    //H5Dclose(dataset_id);
-    //H5Sclose(dataspace_id);
-
-    // surface_t構造体に対応する複合データ型を定義
-    /*
-    hid_t memtype = H5Tcreate(H5T_COMPOUND, sizeof(surface_t));
-    H5Tinsert(memtype, "nx", HOFFSET(surface_t, nx), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ny", HOFFSET(surface_t, ny), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "nz", HOFFSET(surface_t, nz), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "x", HOFFSET(surface_t, x), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "y", HOFFSET(surface_t, y), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "z", HOFFSET(surface_t, z), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ds", HOFFSET(surface_t, ds), H5T_NATIVE_DOUBLE);
-
-    hsize_t surface_dims[1] = {NSurface};
-    dataspace_id = H5Screate_simple(1, surface_dims, NULL);
-    dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-    H5Tclose(memtype);
-    */
-
-    // 反射強度フィールドデータセットの作成と書き込み
-    hsize_t p_dims[2] = {NN, 1};
-    dataspace_id = H5Screate_simple(2, p_dims, NULL);
-    //hsize_t p_dims[3] = {Nx+3, Ny+3, Nz+3};
-    //hsize_t p_dims[4] = {Nx, Ny, Nz, 1};
-    //dataspace_id = H5Screate_simple(4, p_dims, NULL);
-    dataset_id = H5Dcreate(metadata_group_id, "Reflection", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-    // 書き込み用のメモリスペースを修正
-    hsize_t mem_dims2[1] = {1};
-    memspace_id = H5Screate_simple(1, mem_dims2, NULL);
-    for (int nn = 0; nn < NN; nn++)
-    {
-        //double ref_value[1] = { iEx[nn] };
-        double ref_value[1] = { sqrt(Material[iEx[nn]].epsr) };
-        //fprintf(stdout, "ref_value = %f.\n", ref_value[0]);
-
-        hsize_t ref_offset[2] = {nn, 0};
-        hsize_t ref_count[2] = {1, 1};
-        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, ref_offset, NULL, ref_count, NULL);
-        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, ref_value);
-        if (status < 0) {
-            fprintf(stderr, "Error writing Reflection data at nn=%d\n", nn);
-        }
-    }
-    /*
-    //Nx
-    int datacount = 0;
-    //for (int x = iMin + lx; x <= iMax - lx; x++)
-    for (id_t x = iMin; x < iMax; x++)
-    {
-        //Ny
-        //for (int y = jMin - ly; y <= jMax + ly; y++)
-        for (id_t y = jMin; y < jMax; y++)
-        {
-            //Ny
-            //for (int z = kMin + lz; z <= kMax - lz; z++)
-            for (id_t z = kMin; z < kMax; z++)
-            {
-                //境界線の対応は間引く
-                int nn = NA(x, y, z);
-                //printf("%d.\", nn)
-                //sprintf(str, "%7d", nn);
-                //fprintf(stdout, "%s\n", str);
-                //屈折率算出
-                //double ref_value[1] = { sqrt(Material[iEx[datacount]].epsr) };
-                double ref_value[1] = { sqrt(Material[iEx[nn]].epsr) };
-
-                hsize_t ref_offset[4] = {x, y, z, 0};
-                hsize_t ref_count[4] = {1, 1, 1, 1};
-                //fprintf(stdout, "H5Sselect_hyperslab.\n");
-                H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, ref_offset, NULL, ref_count, NULL);
-
-                // 書き込み
-                //fprintf(stdout, "H5Dwrite.\n");
-                status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, ref_value);
-                if (status < 0) {
-                    fprintf(stderr, "Error writing Reflection data at nn=%d\n", nn);
-                    fprintf(stderr, "Error writing Reflection data at datacount=%d\n", datacount);
-                }
-                datacount++;
-            }
-        }
-    }
-    status = H5Sclose(memspace_id);
-    */
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-
-    // メタデータグループのクローズ
-    H5Gclose(metadata_group_id);
-
-    status = H5Fclose(file_id);
-
-    // free
-    memfree2_gpu();
-
-    // copy near3d from device to host
-    memcopy3_gpu();
-
-    // free
-    memfree3_gpu();
+	if (code != cudaSuccess) {
+		fprintf(stderr, "*** CUDA error : %s (%s:%d)\n", cudaGetErrorString(code), file, line);
+		exit(1);
+	}
 }
+#define CUDA_CHECK(ans) cuda_check((ans), __FILE__, __LINE__)
 
-
-// copy from device to host
-static void copy_to_host()
+void solve_bpm(int io, double *tdft, FILE *fp)
 {
-    if (NFeed) {
-        cuda_memcpy(GPU, VFeed, d_VFeed, Feed_size, cudaMemcpyDeviceToHost);
-        cuda_memcpy(GPU, IFeed, d_IFeed, Feed_size, cudaMemcpyDeviceToHost);
-    }
+	// HDF5ファイルの作成
+	hid_t file_id;
+	// local
+	hid_t dataset_id, dataspace_id;
+	herr_t status;
 
-    if (NPoint) {
-        cuda_memcpy(GPU, VPoint, d_VPoint, Point_size, cudaMemcpyDeviceToHost);
-    }
+	char str[BUFSIZ];
+
+	if (!GPU) {
+		fprintf(stderr, "*** BPM solver (CUDA) requires GPU.\n");
+		exit(1);
+	}
+
+	// セルの幅（空間ステップ）を計算 (Xn/Yn/Zn は節点座標で要素数は Nx+1/Ny+1/Nz+1)
+	double Dx = (Xn[Nx] - Xn[0]) / Nx;
+	double Dy = (Yn[Ny] - Yn[0]) / Ny;
+	double Dz = (Zn[Nz] - Zn[0]) / Nz;
+	sprintf(str, "cell step : %.6e %.6e %.6e", Dx, Dy, Dz);
+	if (io) fprintf(fp, "%s\n", str);
+	fprintf(stdout, "%s\n", str);
+
+	// 不均一メッシュの警告 : BPM カーネルは等間隔グリッドを仮定するため、
+	// 不均一の場合は平均セル幅で計算される
+	{
+		const char *axisname[] = {"x", "y", "z"};
+		double *node[] = {Xn, Yn, Zn};
+		const int ncell[] = {Nx, Ny, Nz};
+		for (int a = 0; a < 3; a++) {
+			double dmin = node[a][1] - node[a][0];
+			double dmax = dmin;
+			for (int i = 1; i < ncell[a]; i++) {
+				double d = node[a][i + 1] - node[a][i];
+				if (d < dmin) dmin = d;
+				if (d > dmax) dmax = d;
+			}
+			if ((dmax - dmin) > (1e-6 * dmax)) {
+				sprintf(str, "*** warning : %smesh is not uniform (min=%.6e, max=%.6e). BPM uses the average cell width.",
+						axisname[a], dmin, dmax);
+				if (io) fprintf(fp, "%s\n", str);
+				fprintf(stdout, "%s\n", str);
+			}
+		}
+	}
+
+	// 波長 : OpenFDTD の周波数データ (frequency2 優先) から決定する
+	double lambda;
+	if      (NFreq2 > 0) lambda = SPEED_OF_LIGHT / Freq2[0];
+	else if (NFreq1 > 0) lambda = SPEED_OF_LIGHT / Freq1[0];
+	else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
+	const double k0 = (2 * PI) / lambda;
+
+	// 材料毎の複素屈折率テーブル : n = sqrt(epsr - i*sigma/(omega*eps0))
+	// 損失を imag(n) > 0 として格納する (applyMultiplier の exp(d*imag(n)), d < 0 の規約)
+	floatcomplex *n_mat = (floatcomplex *)malloc(NMaterial * sizeof(floatcomplex));
+	{
+		const double omega = 2 * PI * SPEED_OF_LIGHT / lambda;
+		for (int64_t m = 0; m < NMaterial; m++) {
+			double epsr, sgm;
+			if (Material[m].type == 2) {
+				// 分散性材料は einf で近似 (BPM の単一波長計算)
+				epsr = Material[m].einf;
+				sgm  = 0;
+			}
+			else {
+				epsr = Material[m].epsr;
+				sgm  = Material[m].esgm;
+			}
+			if (epsr <= 0) epsr = 1;  // PEC 等は BPM では真空扱い
+			const double s = sgm / (omega * EPS0);
+			const double mag = sqrt((epsr * epsr) + (s * s));
+			floatcomplex v = {(float)sqrt((mag + epsr) / 2), (float)sqrt((mag - epsr) / 2)};
+			n_mat[m] = v;
+		}
+	}
+
+	// BPM パラメータ (BPM-MATLAB の FDBPM に対応)
+	struct parameters P_var;
+	struct parameters *P = &P_var;
+	P->Nx = Nx;
+	P->Ny = Ny;
+	P->dx = (float)Dx;
+	P->dy = (float)Dy;
+	P->dz = (float)Dz;
+	P->iz_start = 0;
+	P->iz_end = Nz;
+	P->xSymmetry = 0;
+	P->ySymmetry = 0;
+
+	// 参照屈折率 : 入力 (refindex =) を優先し、
+	// 未指定なら計算領域中心 (z=先頭スライス) の材料から取得する
+	if (BPM.n0 > 0) {
+		P->n_0 = (float)BPM.n0;
+	}
+	else {
+		int64_t nn0 = NA(Nx / 2, Ny / 2, 0);
+		P->n_0 = CREALF(n_mat[iEx[nn0]]);
+	}
+
+	// 位相・損失係数 d = -dz*k0
+	P->d = (float)(-P->dz * k0);
+
+	// 複素屈折率分布 : 3D 配列として一括でデバイスへ転送する
+	// (カーネル側は z 方向に区分一定で参照する)
+	P->Nx_n = Nx;
+	P->Ny_n = Ny;
+	P->Nz_n = Nz;
+	P->dz_n = P->dz;
+	P->n_in = (floatcomplex *)malloc((size_t)P->Nx_n * P->Ny_n * P->Nz_n * sizeof(floatcomplex));
+	for (int iz = 0; iz < Nz; iz++) {
+		for (int iy = 0; iy < Ny; iy++) {
+			for (int ix = 0; ix < Nx; ix++) {
+				size_t index = (size_t)ix + ((size_t)P->Nx_n * iy) + ((size_t)P->Nx_n * P->Ny_n * iz);
+				P->n_in[index] = n_mat[iEx[NA(ix, iy, iz)]];
+			}
+		}
+	}
+
+	P->taperPerStep = 0.0;
+	P->twistPerStep = 0.0;
+	P->rho_e = 0.0;
+	P->RoC = INFINITY;  // 直線導波路 (曲げ半径無限大)
+	P->sinBendDirection = 0.0;
+	P->cosBendDirection = 0.0;
+
+	// ADI 法の係数 ax = dz/(4i*dx^2*k0*n0), ay = dz/(4i*dy^2*k0*n0)
+	P->ax = -I * (float)(P->dz / (4 * P->dx * P->dx * k0 * P->n_0));
+	P->ay = -I * (float)(P->dz / (4 * P->dy * P->dy * k0 * P->n_0));
+
+	// ホスト側バッファ (E2/Eyx/b はデバイス側のみ : createDeviceStructs で確保)
+	P->E1 = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex));
+	P->E2 = NULL;
+	P->Eyx = NULL;
+	P->b = NULL;
+	P->Efinal = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex)); // Output E field(Array)
+	P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex)); // Output refractive index(Array)
+	P->multiplier = (float *)malloc((P->Nx * P->Ny) * sizeof(float));
+
+	// 初期電界 (ガウシアンビーム) と端部吸収体 (multiplier) の設定
+	// - ビームウェスト : 入力 (beam =) を優先し、未指定なら領域幅の 1/4
+	// - ビーム中心    : 入力 (beam = w0 x0 y0) > 給電点 (feed) > 領域中心
+	// - 振幅          : 給電点の電圧 (未指定なら 1)
+	double w0, xc0, yc0;
+	{
+		const double Lx = Xn[Nx] - Xn[0];
+		const double Ly = Yn[Ny] - Yn[0];
+		w0 = (BPM.w0 > 0) ? BPM.w0 : 0.25 * MIN(Lx, Ly);  // ビームウェスト
+		if (BPM.center) {
+			xc0 = BPM.x0;
+			yc0 = BPM.y0;
+		}
+		else if (NFeed > 0) {
+			xc0 = Xn[Feed[0].i];
+			yc0 = Yn[Feed[0].j];
+		}
+		else {
+			xc0 = 0.5 * (Xn[0] + Xn[Nx]);
+			yc0 = 0.5 * (Yn[0] + Yn[Ny]);
+		}
+		const double volt = (NFeed > 0) ? Feed[0].volt : 1;
+		const double xEdge = 0.45 * Lx;           // 吸収体開始位置 (領域中心からの距離)
+		const double yEdge = 0.45 * Ly;
+		const double xmid = 0.5 * (Xn[0] + Xn[Nx]);
+		const double ymid = 0.5 * (Yn[0] + Yn[Ny]);
+		const double alpha = 3.0e14;              // 吸収係数 [1/m^3] (BPM-MATLAB 既定値)
+		double power = 0;
+		for (int iy = 0; iy < P->Ny; iy++) {
+			for (int ix = 0; ix < P->Nx; ix++) {
+				long i = ix + (long)iy * P->Nx;
+				double xd = Xc[ix] - xc0;
+				double yd = Yc[iy] - yc0;
+				float amp = (float)(volt * exp(-(xd * xd + yd * yd) / (w0 * w0)));
+				floatcomplex e = {amp, 0.0f};
+				P->E1[i] = e;
+				power += (double)amp * amp;
+				double dist = MAX(0.0, MAX(fabs(Xc[ix] - xmid) - xEdge, fabs(Yc[iy] - ymid) - yEdge));
+				P->multiplier[i] = (float)exp(-P->dz * dist * dist * alpha);
+			}
+		}
+		P->precisePower = power;
+	}
+
+	P->EfieldPower = 0;
+	P->precisePowerDiff = 0;
+
+	// 出力用ホスト配列の初期化 (BPM では FDTD の反復を行わないため明示的にゼロ化する)
+	memset(Eiter, 0, Iter_size);
+	memset(Hiter, 0, Iter_size);
+	Niter = 0;
+	if (NFeed > 0) {
+		memset(VFeed, 0, Feed_size);
+		memset(IFeed, 0, Feed_size);
+	}
+	if (NPoint > 0) {
+		memset(VPoint, 0, Point_size);
+	}
+	// CUDA 版ではホスト側の near3d 配列は memcopy3_gpu() 内で確保されるため、
+	// BPM (FDTD 反復なし) では writeout 用にゼロ配列をここで確保する
+	if ((NN > 0) && (NFreq2 > 0)) {
+		const size_t num = (size_t)NFreq2 * NN;
+		cEx_r = (float *)calloc(num, sizeof(float));
+		cEx_i = (float *)calloc(num, sizeof(float));
+		cEy_r = (float *)calloc(num, sizeof(float));
+		cEy_i = (float *)calloc(num, sizeof(float));
+		cEz_r = (float *)calloc(num, sizeof(float));
+		cEz_i = (float *)calloc(num, sizeof(float));
+		cHx_r = (float *)calloc(num, sizeof(float));
+		cHx_i = (float *)calloc(num, sizeof(float));
+		cHy_r = (float *)calloc(num, sizeof(float));
+		cHy_i = (float *)calloc(num, sizeof(float));
+		cHz_r = (float *)calloc(num, sizeof(float));
+		cHz_i = (float *)calloc(num, sizeof(float));
+	}
+
+	sprintf(str, "lambda : %.6e [m], n_0 : %.4f", lambda, P->n_0);
+	if (io) fprintf(fp, "%s\n", str);
+	fprintf(stdout, "%s\n", str);
+	sprintf(str, "beam : w0 = %.6e [m], center = (%.6e, %.6e) [m]", w0, xc0, yc0);
+	if (io) fprintf(fp, "%s\n", str);
+	fprintf(stdout, "%s\n", str);
+
+	// デバイス側構造体の確保と転送 (E1, multiplier, n_in を転送し E2/Eyx/b/n_out を確保)
+	struct parameters *P_dev;
+	struct debug D_var = {{0.0, 0.0, 0.0}, {0, 0, 0}};
+	struct debug *D = &D_var;
+	struct debug *D_dev;
+	createDeviceStructs(P, &P_dev, D, &D_dev);
+
+	// カーネル起動パラメータ
+	int temp, nBlocks;
+	CUDA_CHECK(cudaOccupancyMaxPotentialBlockSize(&nBlocks, &temp, &substep1a, 0, 0));
+	dim3 blockDims(TILE_DIM, TILE_DIM, 1);
+
+	// HDF5ファイルの作成
+	file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+
+	// BPM は時間反復ではなく Z 軸方向に 1 回伝搬する
+	for (long iz = P->iz_start; iz < P->iz_end; iz++) {
+		sprintf(str, "step iz : %ld / %ld", iz + 1, (long)Nz);
+		fprintf(stdout, "%s\n", str);
+
+		const double t0 = cputime();
+
+		// Douglas-Gunn ADI 法による 1 ステップ伝搬
+		substep1a<<<nBlocks, blockDims>>>(P_dev); // xy -> yx
+		substep1b<<<nBlocks, blockDims>>>(P_dev); // yx -> yx
+		substep2a<<<nBlocks, blockDims>>>(P_dev); // yx -> xy
+		substep2b<<<nBlocks, blockDims>>>(P_dev); // xy -> xy
+		applyMultiplier<<<nBlocks, blockDims>>>(P_dev, iz, D_dev); // xy -> xy
+
+		if (iz + 1 < P->iz_end) swapEPointers<<<1, 1>>>(P_dev, iz);
+		updatePrecisePower<<<1, 1>>>(P_dev);
+		CUDA_CHECK(cudaDeviceSynchronize()); // Wait until all kernels have finished
+
+		*tdft += cputime() - t0;
+	}
+
+	// 最終電界 (デバイス側 E2) と屈折率分布を Efinal / n_out へ回収し、デバイスメモリを解放する
+	CUDA_CHECK(cudaDeviceSynchronize());
+	retrieveAndFreeDeviceStructs(P, P_dev, D, D_dev);
+
+	// result
+	if (io) {
+		sprintf(str, "    --- propagated %ld steps, output power = %.6e ---",
+				(long)(P->iz_end - P->iz_start), P->precisePower);
+		fprintf(fp,     "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+		fflush(fp);
+		fflush(stdout);
+	}
+
+	// time steps
+	Ntime = 1;
+
+	// 結果 (最終電界・屈折率分布) の書き込み
+	{
+		hid_t field_group_id = H5Gcreate(file_id, "/field", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+		hsize_t field_dims[2] = {(hsize_t)P->Ny, (hsize_t)P->Nx};
+		float *tmp = (float *)malloc(P->Nx * P->Ny * sizeof(float));
+		struct {
+			const char *name;
+			floatcomplex *data;
+			int imagpart;
+		} field_data[] = {
+			{"Efinal_r", P->Efinal, 0},
+			{"Efinal_i", P->Efinal, 1},
+			{"n_out_r",  P->n_out,  0},
+			{"n_out_i",  P->n_out,  1}
+		};
+		for (size_t n = 0; n < sizeof(field_data) / sizeof(field_data[0]); n++) {
+			for (long i = 0; i < P->Nx * P->Ny; i++) {
+				tmp[i] = field_data[n].imagpart ? CIMAGF(field_data[n].data[i])
+												: CREALF(field_data[n].data[i]);
+			}
+			dataspace_id = H5Screate_simple(2, field_dims, NULL);
+			dataset_id = H5Dcreate(field_group_id, field_data[n].name, H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmp);
+			H5Dclose(dataset_id);
+			H5Sclose(dataspace_id);
+		}
+		free(tmp);
+		H5Gclose(field_group_id);
+	}
+
+	// メタデータの作成
+	hid_t metadata_group_id = H5Gcreate(file_id, "/metadata", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+
+	// 時間に関するメタデータの書き込み
+	double time_metadata[1] = {Solver.maxiter * Dt};
+	hsize_t time_count[1] = {1};
+	dataspace_id = H5Screate_simple(1, time_count, NULL);
+	dataset_id = H5Dcreate(metadata_group_id, "time", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, time_metadata);
+	H5Dclose(dataset_id);
+	H5Sclose(dataspace_id);
+
+	// Title
+	hsize_t title_dims[1] = {256};
+	dataspace_id = H5Screate_simple(1, title_dims, NULL);
+	dataset_id = H5Dcreate(metadata_group_id, "Title", H5T_NATIVE_CHAR, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	status = H5Dwrite(dataset_id, H5T_NATIVE_CHAR, H5S_ALL, H5S_ALL, H5P_DEFAULT, Title);
+	H5Dclose(dataset_id);
+	H5Sclose(dataspace_id);
+
+	// 各種整数型メタデータの書き込み
+	struct {
+		const char *name;
+		void *value;
+		hid_t type;
+	} metadata[] = {
+		{"Nx", &Nx, H5T_NATIVE_INT},
+		{"Ny", &Ny, H5T_NATIVE_INT},
+		{"Nz", &Nz, H5T_NATIVE_INT},
+		{"Ni", &Ni, H5T_NATIVE_INT},
+		{"Nj", &Nj, H5T_NATIVE_INT},
+		{"Nk", &Nk, H5T_NATIVE_INT},
+		{"N0", &N0, H5T_NATIVE_INT},
+		{"NN", &NN, H5T_NATIVE_INT64},
+		{"NFreq1", &NFreq1, H5T_NATIVE_INT},
+		{"NFreq2", &NFreq2, H5T_NATIVE_INT},
+		{"NFeed", &NFeed, H5T_NATIVE_INT},
+		{"NPoint", &NPoint, H5T_NATIVE_INT},
+		{"Niter", &Niter, H5T_NATIVE_INT},
+		{"Ntime", &Ntime, H5T_NATIVE_INT},
+		{"Solver_maxiter", &Solver.maxiter, H5T_NATIVE_INT},
+		{"Solver_nout", &Solver.nout, H5T_NATIVE_INT},
+		{"NGline", &NGline, H5T_NATIVE_INT},
+		{"IPlanewave", &IPlanewave, H5T_NATIVE_INT}
+	};
+
+	for (size_t i = 0; i < sizeof(metadata) / sizeof(metadata[0]); i++) {
+		dataspace_id = H5Screate(H5S_SCALAR);
+		dataset_id = H5Dcreate(metadata_group_id, metadata[i].name, metadata[i].type, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+		status = H5Dwrite(dataset_id, metadata[i].type, H5S_ALL, H5S_ALL, H5P_DEFAULT, metadata[i].value);
+		H5Dclose(dataset_id);
+		H5Sclose(dataspace_id);
+	}
+
+	// Dtの書き込み
+	dataspace_id = H5Screate(H5S_SCALAR);
+	dataset_id = H5Dcreate(metadata_group_id, "Dt", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &Dt);
+	H5Dclose(dataset_id);
+	H5Sclose(dataspace_id);
+
+	// BPM パラメータの書き込み
+	{
+		const double n_0_d = P->n_0;
+		struct {
+			const char *name;
+			const double *value;
+		} bpm_metadata[] = {
+			{"lambda",  &lambda},
+			{"n_0",     &n_0_d},
+			{"beam_w0", &w0},
+			{"beam_x0", &xc0},
+			{"beam_y0", &yc0}
+		};
+		for (size_t i = 0; i < sizeof(bpm_metadata) / sizeof(bpm_metadata[0]); i++) {
+			dataspace_id = H5Screate(H5S_SCALAR);
+			dataset_id = H5Dcreate(metadata_group_id, bpm_metadata[i].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+			status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, bpm_metadata[i].value);
+			H5Dclose(dataset_id);
+			H5Sclose(dataspace_id);
+		}
+	}
+
+	// Planewaveの書き込み
+	dataspace_id = H5Screate(H5S_SCALAR);
+	dataset_id = H5Dcreate(metadata_group_id, "Planewave", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &Planewave);
+	H5Dclose(dataset_id);
+	H5Sclose(dataspace_id);
+
+	// 配列データの書き込み
+	struct {
+		const char *name;
+		double *data;
+		size_t size;
+	} arrays[] = {
+		{"Xn", Xn, (size_t)(Nx + 1)},
+		{"Yn", Yn, (size_t)(Ny + 1)},
+		{"Zn", Zn, (size_t)(Nz + 1)},
+		{"Xc", Xc, (size_t)Nx},
+		{"Yc", Yc, (size_t)Ny},
+		{"Zc", Zc, (size_t)Nz},
+		{"Eiter", Eiter, (size_t)Niter},
+		{"Hiter", Hiter, (size_t)Niter},
+		{"VFeed", VFeed, (size_t)(NFeed * (Solver.maxiter + 1))},
+		{"IFeed", IFeed, (size_t)(NFeed * (Solver.maxiter + 1))},
+		{"VPoint", VPoint, (size_t)(NPoint * (Solver.maxiter + 1))},
+		{"Freq1", Freq1, (size_t)NFreq1},
+		{"Freq2", Freq2, (size_t)NFreq2},
+		{"Gline", reinterpret_cast<double*>(Gline), (size_t)(NGline * 2 * 3)}
+	};
+
+	for (size_t i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
+		if ((arrays[i].size == 0) || (arrays[i].data == NULL)) continue;
+		hsize_t array_dims[1] = {arrays[i].size};
+		dataspace_id = H5Screate_simple(1, array_dims, NULL);
+		dataset_id = H5Dcreate(metadata_group_id, arrays[i].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+		status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, arrays[i].data);
+		H5Dclose(dataset_id);
+		H5Sclose(dataspace_id);
+	}
+
+	// NSurfaceデータの書き込み
+	dataspace_id = H5Screate(H5S_SCALAR);
+	dataset_id = H5Dcreate(metadata_group_id, "NSurface", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	status = H5Dwrite(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &NSurface);
+	H5Dclose(dataset_id);
+	H5Sclose(dataspace_id);
+
+	// Surfaceデータの書き込み
+	// surface_t構造体に対応する複合データ型を定義
+	hid_t memtype = H5Tcreate(H5T_COMPOUND, sizeof(surface_t));
+	H5Tinsert(memtype, "nx", HOFFSET(surface_t, nx), H5T_NATIVE_DOUBLE);
+	H5Tinsert(memtype, "ny", HOFFSET(surface_t, ny), H5T_NATIVE_DOUBLE);
+	H5Tinsert(memtype, "nz", HOFFSET(surface_t, nz), H5T_NATIVE_DOUBLE);
+	H5Tinsert(memtype, "x", HOFFSET(surface_t, x), H5T_NATIVE_DOUBLE);
+	H5Tinsert(memtype, "y", HOFFSET(surface_t, y), H5T_NATIVE_DOUBLE);
+	H5Tinsert(memtype, "z", HOFFSET(surface_t, z), H5T_NATIVE_DOUBLE);
+	H5Tinsert(memtype, "ds", HOFFSET(surface_t, ds), H5T_NATIVE_DOUBLE);
+
+	if ((NSurface > 0) && (Surface != NULL)) {
+		hsize_t surface_dims[1] = {(hsize_t)NSurface};
+		dataspace_id = H5Screate_simple(1, surface_dims, NULL);
+		dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+		status = H5Dwrite(dataset_id, memtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
+		H5Dclose(dataset_id);
+		H5Sclose(dataspace_id);
+	}
+	H5Tclose(memtype);
+
+	// メタデータグループのクローズ
+	H5Gclose(metadata_group_id);
+
+	status = H5Fclose(file_id);
+
+	// free (FDTD 用デバイスメモリ)
+	memfree2_gpu();
+	memfree3_gpu();
+
+	// ホスト側バッファの解放 (E2/Eyx/b はデバイス側のみで retrieveAndFreeDeviceStructs が解放済み)
+	free(P->E1);
+	free(P->Efinal);
+	free(P->n_out);
+	free(P->n_in);
+	free(P->multiplier);
+	free(n_mat);
 }
-
-
-

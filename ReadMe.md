@@ -16,6 +16,9 @@ cmake --build build -j
 実行ファイルは `bin/` に出力されます (`obpm`, `obpm_post`)。
 
 - CUDA 版: `-DWITH_CUDA=ON` (要 CUDA Toolkit)
+  - `obpm_cuda` は CPU 版と同じ BPM 機能 (beam/refindex/導電率吸収/メッシュ警告) に対応しています。
+    屈折率分布は 3D 配列として一括でデバイスへ転送されます。
+  - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI)
 
 ## 実行

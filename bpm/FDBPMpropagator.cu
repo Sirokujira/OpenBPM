@@ -226,6 +226,44 @@ void applyMultiplier(struct parameters *P_global, long iz, struct debug *D) {
   float sinvalue = sinf(-P->twistPerStep*iz);
   float scaling = 1/(1 - P->taperPerStep*iz); // Take reciprocal because we go from scaled frame to unscaled frame
   for(long i=threadNum;i<P->Nx*P->Ny;i+=gridDim.x*blockDim.x*blockDim.y) {
+    long ix = i%P->Nx;
+    float x = P->dx*(ix - (P->Nx-1)/2.0f*(P->ySymmetry == 0));
+    long iy = i/P->Nx;
+    float y = P->dy*(iy - (P->Ny-1)/2.0f*(P->xSymmetry == 0));
+    floatcomplex n = 0;
+    if(P->taperPerStep || P->twistPerStep) { // Rotate, scale, interpolate. If we are tapering or twisting, we know that the RIP is 2D
+      float x_src = scaling*(cosvalue*x - sinvalue*y);
+      float y_src = scaling*(sinvalue*x + cosvalue*y);
+      float ix_src = MIN(MAX(0.0f,x_src/P->dx + (P->Nx - 1)/2.0f*(P->ySymmetry == 0)),(P->Nx - 1)*(1-FLT_EPSILON)); // Fractional index, coerced to be within the source window
+      float iy_src = MIN(MAX(0.0f,y_src/P->dy + (P->Ny - 1)/2.0f*(P->xSymmetry == 0)),(P->Ny - 1)*(1-FLT_EPSILON));
+      long ix_low = (long)FLOORF(ix_src);
+      long iy_low = (long)FLOORF(iy_src);
+      float ix_frac = ix_src - FLOORF(ix_src);
+      float iy_frac = iy_src - FLOORF(iy_src);
+      n = P->n_in[ix_low     + P->Nx*(iy_low    )]*(1 - ix_frac)*(1 - iy_frac) +
+          P->n_in[ix_low + 1 + P->Nx*(iy_low    )]*(    ix_frac)*(1 - iy_frac) +
+          P->n_in[ix_low     + P->Nx*(iy_low + 1)]*(1 - ix_frac)*(    iy_frac) +
+          P->n_in[ix_low + 1 + P->Nx*(iy_low + 1)]*(    ix_frac)*(    iy_frac); // Bilinear interpolation
+    } else if(P->Nz_n == 1) { // 2D RIP
+      n = P->n_in[i];
+    } else { // 3D RIP
+      float z = iz*P->dz;
+      long ix_n = MIN(MAX(0L,ix - (P->Nx - P->Nx_n)/2),P->Nx_n-1);
+      long iy_n = MIN(MAX(0L,iy - (P->Ny - P->Ny_n)/2),P->Ny_n-1);
+      float iz_n = MIN(MAX(0.0f,z/P->dz_n),(P->Nz_n - 1)*(1-FLT_EPSILON)); // Fractional index, coerced to be within the n window
+      long iz_n_low = (long)FLOORF(iz_n);
+      float iz_n_frac = iz_n - FLOORF(iz_n);
+      n = P->n_in[ix_n + P->Nx_n*iy_n + P->Ny_n*P->Nx_n*(iz_n_low    )]*(1 - iz_n_frac) +
+          P->n_in[ix_n + P->Nx_n*iy_n + P->Ny_n*P->Nx_n*(iz_n_low + 1)]*(    iz_n_frac); // Linear interpolation in z
+    }
+    if(iz == P->iz_end-1) P->n_out[i] = n;
+    float n_bend = CREALF(n)*(1-(sqrf(CREALF(n))*(x*P->cosBendDirection+y*P->sinBendDirection)/2/P->RoC*P->rho_e))*exp((x*P->cosBendDirection+y*P->sinBendDirection)/P->RoC);
+    floatcomplex a = P->multiplier[i]*CEXPF(P->d*(CIMAGF(n) + (sqrf(n_bend) - sqrf(P->n_0))*I/(2*P->n_0))); // Multiplier includes only the edge absorber
+    P->E2[i] *= fieldCorrection*a;
+    float anormsqr = sqrf(CREALF(a)) + sqrf(CIMAGF(a));
+    if(anormsqr > 1 - 10*FLT_EPSILON && anormsqr < 1 + 10*FLT_EPSILON) anormsqr = 1; // To avoid accumulating power discrepancies due to rounding errors
+    precisePowerDiffThread += (sqrf(CREALF(P->E2[i])) + sqrf(CIMAGF(P->E2[i])))*(1 - 1/anormsqr);
+  }
 
   atomicAdd(&P_global->precisePowerDiff,precisePowerDiffThread);
 }
