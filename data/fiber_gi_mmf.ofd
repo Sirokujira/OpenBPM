@@ -1,0 +1,67 @@
+# OpenBPM sample : graded-index multimode fiber (GI 型マルチモードファイバ)
+#
+# GI-MMF の自己集束 (セルフフォーカシング) シミュレーション (BPM)
+#   - コア : 半径 a = 25um, 放物型屈折率分布 (8 層の同心円柱で近似)
+#       n(r)^2 = n1^2 * (1 - 2*Delta*(r/a)^2)
+#       n1 = 1.4578 (軸上), NA = 0.2, Delta = NA^2/(2*n1^2) = 0.00941
+#   - クラッド : n = 1.4440, 波長 1.55um
+#
+# 放物型分布では光線が正弦軌道を描き、周期 (ピッチ) は
+#   Lambda = 2*pi*a/sqrt(2*Delta) = 1145um
+# となる。コア中心から 8um オフセットして励振したビームは
+#   x(z) = 8um * cos(2*pi*z/Lambda)
+# に沿ってコア内を往復する (z = 573um で -8um, 1145um で +8um に戻る)。
+#
+# 期待される動作 (BPM のロジック確認ポイント, z = 1200um 実測):
+#   1. /field/Ixz の伝搬マップにビーム重心の正弦振動が見える
+#      (重心 +8.0 -> -8.0 -> +7.7um, ステップインデックス MMF の
+#       直進+境界反射との違い)
+#   2. 振動周期が理論ピッチと一致する (実測 1150um / 理論 1145um)
+#   3. 電力はコア内に保存される
+OpenBPM 2 2
+title = graded-index multimode fiber (BPM sample)
+
+xmesh = -35e-6 140 35e-6
+ymesh = -35e-6 140 35e-6
+zmesh = 0 1200 1200e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>
+# id=2 : クラッド (n = 1.4440)
+material = 1 2.085136 0 1 0
+# id=3-10 : 放物型分布の 8 層近似 (外側 -> 内側, epsr = n1^2 - 2*Delta*n1^2*(r/a)^2)
+material = 1 2.089968 0 1 0
+material = 1 2.098720 0 1 0
+material = 1 2.106223 0 1 0
+material = 1 2.112476 0 1 0
+material = 1 2.117477 0 1 0
+material = 1 2.121228 0 1 0
+material = 1 2.123729 0 1 0
+material = 1 2.124980 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+# 後の行が前の行を上書きするため、外側の層から順に重ねる
+geometry = 2 1 -35e-6 35e-6 -35e-6 35e-6 0 1200e-6
+geometry = 3 13 -25.000e-6 25.000e-6 -25.000e-6 25.000e-6 0 1200e-6
+geometry = 4 13 -21.875e-6 21.875e-6 -21.875e-6 21.875e-6 0 1200e-6
+geometry = 5 13 -18.750e-6 18.750e-6 -18.750e-6 18.750e-6 0 1200e-6
+geometry = 6 13 -15.625e-6 15.625e-6 -15.625e-6 15.625e-6 0 1200e-6
+geometry = 7 13 -12.500e-6 12.500e-6 -12.500e-6 12.500e-6 0 1200e-6
+geometry = 8 13 -9.375e-6 9.375e-6 -9.375e-6 9.375e-6 0 1200e-6
+geometry = 9 13 -6.250e-6 6.250e-6 -6.250e-6 6.250e-6 0 1200e-6
+geometry = 10 13 -3.125e-6 3.125e-6 -3.125e-6 3.125e-6 0 1200e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> <x0[m]> <y0[m]> : コア中心から 8um オフセット励振
+beam = 5e-6 8e-6 0
+
+# refindex = <n0> : 軸上屈折率を指定
+refindex = 1.4578
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

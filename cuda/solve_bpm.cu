@@ -144,10 +144,19 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 
 	P->taperPerStep = 0.0;
 	P->twistPerStep = 0.0;
-	P->rho_e = 0.0;
-	P->RoC = INFINITY;  // 直線導波路 (曲げ半径無限大)
-	P->sinBendDirection = 0.0;
-	P->cosBendDirection = 0.0;
+	// 曲げ : 入力 (bend = RoC [dir] [rho_e]) があれば等価屈折率法で反映する
+	if (BPM.RoC > 0) {
+		P->rho_e = (float)BPM.rho_e;
+		P->RoC = (float)BPM.RoC;
+		P->sinBendDirection = (float)sin(BPM.bendDir * DTOR);
+		P->cosBendDirection = (float)cos(BPM.bendDir * DTOR);
+	}
+	else {
+		P->rho_e = 0.0;
+		P->RoC = INFINITY;  // 直線導波路 (曲げ半径無限大)
+		P->sinBendDirection = 0.0;
+		P->cosBendDirection = 0.0;
+	}
 
 	// ADI 法の係数 ax = dz/(4i*dx^2*k0*n0), ay = dz/(4i*dy^2*k0*n0)
 	P->ax = -I * (float)(P->dz / (4 * P->dx * P->dx * k0 * P->n_0));
@@ -244,6 +253,15 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	sprintf(str, "beam : w0 = %.6e [m], center = (%.6e, %.6e) [m]", w0, xc0, yc0);
 	if (io) fprintf(fp, "%s\n", str);
 	fprintf(stdout, "%s\n", str);
+	if (BPM.RoC > 0) {
+		sprintf(str, "bend : RoC = %.6e [m], direction = %.1f [deg]", BPM.RoC, BPM.bendDir);
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
+
+	// 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
+	float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
+	floatcomplex *Erow = (floatcomplex *)malloc(P->Nx * sizeof(floatcomplex));
 
 	// デバイス側構造体の確保と転送 (E1, multiplier, n_in を転送し E2/Eyx/b/n_out を確保)
 	struct parameters *P_dev;
@@ -274,9 +292,23 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		substep2b<<<nBlocks, blockDims>>>(P_dev); // xy -> xy
 		applyMultiplier<<<nBlocks, blockDims>>>(P_dev, iz, D_dev); // xy -> xy
 
+		CUDA_CHECK(cudaDeviceSynchronize()); // Wait until all kernels have finished
+
+		// 中心行の強度を記録 (このステップの結果はデバイス側 E2 にある)
+		{
+			struct parameters P_now;
+			CUDA_CHECK(cudaMemcpy(&P_now, P_dev, sizeof(struct parameters), cudaMemcpyDeviceToHost));
+			const long row0 = (long)(P->Ny / 2) * P->Nx;
+			CUDA_CHECK(cudaMemcpy(Erow, P_now.E2 + row0, P->Nx * sizeof(floatcomplex), cudaMemcpyDeviceToHost));
+			for (long ix = 0; ix < P->Nx; ix++) {
+				Ixz[(iz - P->iz_start) * P->Nx + ix] =
+					(CREALF(Erow[ix]) * CREALF(Erow[ix])) + (CIMAGF(Erow[ix]) * CIMAGF(Erow[ix]));
+			}
+		}
+
 		if (iz + 1 < P->iz_end) swapEPointers<<<1, 1>>>(P_dev, iz);
 		updatePrecisePower<<<1, 1>>>(P_dev);
-		CUDA_CHECK(cudaDeviceSynchronize()); // Wait until all kernels have finished
+		CUDA_CHECK(cudaDeviceSynchronize());
 
 		*tdft += cputime() - t0;
 	}
@@ -325,6 +357,16 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			H5Sclose(dataspace_id);
 		}
 		free(tmp);
+
+		// 伝搬マップ |E(x, y=Ny/2, z)|^2 の書き込み
+		{
+			hsize_t ixz_dims[2] = {(hsize_t)(P->iz_end - P->iz_start), (hsize_t)P->Nx};
+			dataspace_id = H5Screate_simple(2, ixz_dims, NULL);
+			dataset_id = H5Dcreate(field_group_id, "Ixz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Ixz);
+			H5Dclose(dataset_id);
+			H5Sclose(dataspace_id);
+		}
 		H5Gclose(field_group_id);
 	}
 
@@ -494,4 +536,6 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	free(P->n_in);
 	free(P->multiplier);
 	free(n_mat);
+	free(Ixz);
+	free(Erow);
 }

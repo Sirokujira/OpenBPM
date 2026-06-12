@@ -217,6 +217,9 @@ EXTERN struct {
 	double x0, y0;            // beam center [m]
 	int    center;            // 1 = beam center specified by input
 	double n0;                // reference refractive index (0 = auto)
+	double RoC;               // bend radius of curvature [m] (0 = straight)
+	double bendDir;           // bend direction [deg] (0 = +x)
+	double rho_e;             // effective elasto-optic coefficient
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {

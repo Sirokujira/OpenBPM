@@ -69,6 +69,9 @@ int input_data(FILE *fp)
 	BPM.x0 = BPM.y0 = 0;
 	BPM.center = 0;
 	BPM.n0 = 0;       // 0 = auto
+	BPM.RoC = 0;      // 0 = straight
+	BPM.bendDir = 0;
+	BPM.rho_e = 0;
 
 	NFreq1 =
 	NFreq2 = 0;
@@ -471,6 +474,16 @@ int input_data(FILE *fp)
 				printf(errfmt2, strkey);
 				return 1;
 			}
+		}
+		else if (!strcmp(strkey, "bend")) {
+			// bend = <RoC[m]> [<direction[deg]> [<rho_e>]] : 曲げ半径 (等価屈折率法)
+			BPM.RoC = atof(token[2]);
+			if (BPM.RoC <= 0) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+			if (ntoken > 3) BPM.bendDir = atof(token[3]);
+			if (ntoken > 4) BPM.rho_e = atof(token[4]);
 		}
 	}
 /*
