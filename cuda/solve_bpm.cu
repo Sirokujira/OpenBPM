@@ -37,6 +37,10 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		fprintf(stderr, "*** BPM solver (CUDA) requires GPU.\n");
 		exit(1);
 	}
+	if (BPM.pol || BPM.wideangle) {
+		fprintf(stderr, "*** polarization/wideangle is not supported in the CUDA build yet. Use the CPU solver (obpm).\n");
+		exit(1);
+	}
 
 	// セルの幅（空間ステップ）を計算 (Xn/Yn/Zn は節点座標で要素数は Nx+1/Ny+1/Nz+1)
 	double Dx = (Xn[Nx] - Xn[0]) / Nx;

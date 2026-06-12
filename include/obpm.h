@@ -220,6 +220,9 @@ EXTERN struct {
 	double RoC;               // bend radius of curvature [m] (0 = straight)
 	double bendDir;           // bend direction [deg] (0 = +x)
 	double rho_e;             // effective elasto-optic coefficient
+	int    pol;               // polarization: 0 = scalar, 1 = x (semivectorial), 2 = y
+	int    wideangle;         // 0 = paraxial, 1 = wide-angle Pade(1,1)
+	double tiltx, tilty;      // beam tilt angle [deg]
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {

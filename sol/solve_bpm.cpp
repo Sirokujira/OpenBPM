@@ -9,6 +9,9 @@
 #include "bpm/bpm_prototype.h"
 #include "bpm/ElectricFieldProfile.hpp"
 #include "bpm/RefractiveIndexProfile.hpp"
+#include "bpm/wabpm.h"
+
+#include <complex>
 
 
 void solve_bpm(int io, double *tdft, FILE *fp) {
@@ -177,6 +180,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         const double xmid = 0.5 * (Xn[0] + Xn[Nx]);
         const double ymid = 0.5 * (Yn[0] + Yn[Ny]);
         const double alpha = 3.0e14;              // 吸収係数 [1/m^3] (BPM-MATLAB 既定値)
+        // 入射ビームの傾き (beamtilt =) : 横方向波数の位相ランプ
+        const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
+        const double kty = k0 * P->n_0 * sin(BPM.tilty * DTOR);
         double power = 0;
         for (int iy = 0; iy < P->Ny; iy++) {
             for (int ix = 0; ix < P->Nx; ix++) {
@@ -184,7 +190,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 double xd = Xc[ix] - xc0;
                 double yd = Yc[iy] - yc0;
                 float amp = (float)(volt * exp(-(xd * xd + yd * yd) / (w0 * w0)));
-                floatcomplex e = {amp, 0.0f};
+                double ph = -(ktx * xd) - (kty * yd);
+                floatcomplex e = {(float)(amp * cos(ph)), (float)(amp * sin(ph))};
                 P->E1[i] = e;
                 power += (double)amp * amp;
                 double dist = MAX(0.0, MAX(fabs(Xc[ix] - xmid) - xEdge, fabs(Yc[iy] - ymid) - yEdge));
@@ -231,6 +238,94 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
+    if (BPM.pol || BPM.wideangle) {
+        // ============================================================
+        // 拡張パス : 広角 BPM (Pade(1,1)) / 半ベクトル BPM (倍精度)
+        // 屈折率項を演算子の内部に含めるため、位相 multiplier ではなく
+        // 一般化 ADI (bpm/wabpm.cpp) で伝搬する。曲げは未対応。
+        // ============================================================
+        if (BPM.RoC > 0) {
+            sprintf(str, "*** warning : bend is ignored in wideangle/polarization mode.");
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+        sprintf(str, "mode : %s, polarization = %s",
+                (BPM.wideangle ? "wide-angle Pade(1,1)" : "paraxial"),
+                (BPM.pol == 1 ? "x (semivectorial)" : (BPM.pol == 2 ? "y (semivectorial)" : "scalar")));
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+
+        wabpm_params W;
+        W.Nx = Nx;
+        W.Ny = Ny;
+        W.dx = P->dx;
+        W.dy = P->dy;
+        W.dz = P->dz;
+        W.k0 = k0;
+        W.n0 = P->n_0;
+        W.wideangle = BPM.wideangle;
+        W.pol = BPM.pol;
+
+        std::complex<double> *Ed = new std::complex<double>[(size_t)Nx * Ny];
+        std::complex<double> *n2 = new std::complex<double>[(size_t)Nx * Ny];
+
+        // 初期電界 (チルト位相込みの E1) を倍精度へ
+        for (long i = 0; i < (long)Nx * Ny; i++) {
+            Ed[i] = std::complex<double>(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
+        }
+
+        for (long iz = P->iz_start; iz < P->iz_end; iz++) {
+            sprintf(str, "step iz : %ld / %ld", iz + 1, (long)Nz);
+            fprintf(stdout, "%s\n", str);
+
+            const double t0 = cputime();
+
+            // このスライスの複素比誘電率 (n_mat は損失を +imag で保持 -> 物理符号 n = nr - i*ni に戻す)
+            for (int iy = 0; iy < P->Ny; iy++) {
+                for (int ix = 0; ix < P->Nx; ix++) {
+                    long index = (long)(P->Nx * iy) + ix;
+                    int64_t nn = NA(ix, iy, iz);
+                    const floatcomplex nm = n_mat[iEx[nn]];
+                    std::complex<double> n(CREALF(nm), -CIMAGF(nm));
+                    n2[index] = n * n;
+                }
+            }
+
+            // 1 ステップ伝搬 + 端部吸収体
+            wabpm_step(&W, Ed, n2);
+            for (long i = 0; i < (long)Nx * Ny; i++) {
+                Ed[i] *= P->multiplier[i];
+            }
+
+            // 中心行の強度を記録
+            {
+                const long row0 = (long)(P->Ny / 2) * P->Nx;
+                for (long ix = 0; ix < P->Nx; ix++) {
+                    Ixz[(iz - P->iz_start) * P->Nx + ix] = (float)std::norm(Ed[row0 + ix]);
+                }
+            }
+
+            *tdft += cputime() - t0;
+        }
+
+        // 最終電界・屈折率分布・出力電力を格納
+        double power = 0;
+        for (long i = 0; i < (long)Nx * Ny; i++) {
+            floatcomplex e = {(float)Ed[i].real(), (float)Ed[i].imag()};
+            P->Efinal[i] = e;
+            power += std::norm(Ed[i]);
+        }
+        P->precisePower = power;
+        for (int iy = 0; iy < P->Ny; iy++) {
+            for (int ix = 0; ix < P->Nx; ix++) {
+                long index = (long)(P->Nx * iy) + ix;
+                P->n_out[index] = n_mat[iEx[NA(ix, iy, P->iz_end - 1)]];
+            }
+        }
+        delete[] Ed;
+        delete[] n2;
+    }
+    else {
     // BPM は時間反復ではなく Z 軸方向に 1 回伝搬する
     for(long iz = P->iz_start; iz < P->iz_end; iz++) {
         sprintf(str, "step iz : %ld / %ld", iz + 1, (long)Nz);
@@ -280,6 +375,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 最終電界を Efinal へ格納
     if (P->E2 != P->Efinal) {
         memcpy(P->Efinal, P->E2, P->Nx * P->Ny * sizeof(floatcomplex));
+    }
     }
 
     // result

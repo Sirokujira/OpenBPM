@@ -72,6 +72,9 @@ int input_data(FILE *fp)
 	BPM.RoC = 0;      // 0 = straight
 	BPM.bendDir = 0;
 	BPM.rho_e = 0;
+	BPM.pol = 0;      // scalar
+	BPM.wideangle = 0;
+	BPM.tiltx = BPM.tilty = 0;
 
 	NFreq1 =
 	NFreq2 = 0;
@@ -484,6 +487,25 @@ int input_data(FILE *fp)
 			}
 			if (ntoken > 3) BPM.bendDir = atof(token[3]);
 			if (ntoken > 4) BPM.rho_e = atof(token[4]);
+		}
+		else if (!strcmp(strkey, "polarization")) {
+			// polarization = <scalar|x|y> : 半ベクトル BPM の偏波方向
+			if      (!strcmp(token[2], "x")) BPM.pol = 1;
+			else if (!strcmp(token[2], "y")) BPM.pol = 2;
+			else if (!strcmp(token[2], "scalar") || !strcmp(token[2], "0")) BPM.pol = 0;
+			else {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+		}
+		else if (!strcmp(strkey, "wideangle")) {
+			// wideangle = <0|1> : 広角 BPM (Pade(1,1))
+			BPM.wideangle = atoi(token[2]);
+		}
+		else if (!strcmp(strkey, "beamtilt")) {
+			// beamtilt = <theta_x[deg]> [<theta_y[deg]>] : 入射ビームの傾き
+			BPM.tiltx = atof(token[2]);
+			if (ntoken > 3) BPM.tilty = atof(token[3]);
 		}
 	}
 /*
