@@ -29,4 +29,28 @@ void wabpm_step(const wabpm_params *W, std::complex<double> *E, const std::compl
 
 #endif
 
+// ---------------------------------------------------------------
+// CUDA 版 (bpm/wabpm.cu) : デバイス常駐の伝搬コンテキスト
+// ---------------------------------------------------------------
+#ifdef __CUDACC__
+
+#include <thrust/complex.h>
+typedef thrust::complex<double> wabpm_cplx;
+
+struct wabpm_gpu;  // opaque
+
+// コンテキスト生成 (E_host : 初期電界, mult_host : 端部吸収体, いずれも Nx*Ny)
+extern struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
+                                          const wabpm_cplx *E_host, const float *mult_host);
+// 1 ステップ伝搬 (n2_host : このスライスの複素比誘電率) + 吸収体適用
+extern void wabpm_gpu_step(struct wabpm_gpu *G, const wabpm_cplx *n2_host);
+// 行 iy の電界をホストへ取得 (Ixz 記録用)
+extern void wabpm_gpu_get_row(struct wabpm_gpu *G, int iy, wabpm_cplx *row_host);
+// 全電界をホストへ取得
+extern void wabpm_gpu_get_field(struct wabpm_gpu *G, wabpm_cplx *E_host);
+// 解放
+extern void wabpm_gpu_destroy(struct wabpm_gpu *G);
+
+#endif
+
 #endif

@@ -13,6 +13,7 @@ sol/solve_bpm.cpp の CUDA 版
 #define FILE_NAME "time_series_data.h5"
 
 #include "bpm/bpm_prototype.h"
+#include "bpm/wabpm.h"
 
 static void cuda_check(cudaError_t code, const char *file, int line)
 {
@@ -35,10 +36,6 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 
 	if (!GPU) {
 		fprintf(stderr, "*** BPM solver (CUDA) requires GPU.\n");
-		exit(1);
-	}
-	if (BPM.pol || BPM.wideangle) {
-		fprintf(stderr, "*** polarization/wideangle is not supported in the CUDA build yet. Use the CPU solver (obpm).\n");
 		exit(1);
 	}
 
@@ -202,6 +199,9 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		const double xmid = 0.5 * (Xn[0] + Xn[Nx]);
 		const double ymid = 0.5 * (Yn[0] + Yn[Ny]);
 		const double alpha = 3.0e14;              // 吸収係数 [1/m^3] (BPM-MATLAB 既定値)
+		// 入射ビームの傾き (beamtilt =) : 横方向波数の位相ランプ
+		const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
+		const double kty = k0 * P->n_0 * sin(BPM.tilty * DTOR);
 		double power = 0;
 		for (int iy = 0; iy < P->Ny; iy++) {
 			for (int ix = 0; ix < P->Nx; ix++) {
@@ -209,7 +209,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				double xd = Xc[ix] - xc0;
 				double yd = Yc[iy] - yc0;
 				float amp = (float)(volt * exp(-(xd * xd + yd * yd) / (w0 * w0)));
-				floatcomplex e = {amp, 0.0f};
+				double ph = -(ktx * xd) - (kty * yd);
+				floatcomplex e = {(float)(amp * cos(ph)), (float)(amp * sin(ph))};
 				P->E1[i] = e;
 				power += (double)amp * amp;
 				double dist = MAX(0.0, MAX(fabs(Xc[ix] - xmid) - xEdge, fabs(Yc[iy] - ymid) - yEdge));
@@ -267,6 +268,94 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
 	floatcomplex *Erow = (floatcomplex *)malloc(P->Nx * sizeof(floatcomplex));
 
+	// HDF5ファイルの作成
+	file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+
+	if (BPM.pol || BPM.wideangle) {
+		// ============================================================
+		// 拡張パス : 広角 BPM (Pade(1,1)) / 半ベクトル BPM (倍精度, bpm/wabpm.cu)
+		// 屈折率項を演算子の内部に含めるため、一般化 ADI で伝搬する。曲げは未対応。
+		// ============================================================
+		if (BPM.RoC > 0) {
+			sprintf(str, "*** warning : bend is ignored in wideangle/polarization mode.");
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
+		sprintf(str, "mode : %s, polarization = %s (CUDA)",
+				(BPM.wideangle ? "wide-angle Pade(1,1)" : "paraxial"),
+				(BPM.pol == 1 ? "x (semivectorial)" : (BPM.pol == 2 ? "y (semivectorial)" : "scalar")));
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+
+		wabpm_params W;
+		W.Nx = Nx;
+		W.Ny = Ny;
+		W.dx = P->dx;
+		W.dy = P->dy;
+		W.dz = P->dz;
+		W.k0 = k0;
+		W.n0 = P->n_0;
+		W.wideangle = BPM.wideangle;
+		W.pol = BPM.pol;
+
+		wabpm_cplx *Ed = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
+		wabpm_cplx *n2 = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
+
+		// 初期電界 (チルト位相込みの E1) を倍精度へ
+		for (long i = 0; i < (long)Nx * Ny; i++) {
+			Ed[i] = wabpm_cplx(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
+		}
+
+		struct wabpm_gpu *G = wabpm_gpu_create(&W, Ed, P->multiplier);
+
+		for (long iz = P->iz_start; iz < P->iz_end; iz++) {
+			sprintf(str, "step iz : %ld / %ld", iz + 1, (long)Nz);
+			fprintf(stdout, "%s\n", str);
+
+			const double t0 = cputime();
+
+			// このスライスの複素比誘電率 (n_mat は損失を +imag で保持 -> 物理符号 n = nr - i*ni)
+			for (int iy = 0; iy < Ny; iy++) {
+				for (int ix = 0; ix < Nx; ix++) {
+					long index = (long)(Nx * iy) + ix;
+					const floatcomplex nm = n_mat[iEx[NA(ix, iy, iz)]];
+					wabpm_cplx n(CREALF(nm), -CIMAGF(nm));
+					n2[index] = n * n;
+				}
+			}
+
+			// 1 ステップ伝搬 (+ 端部吸収体, wabpm_gpu_step 内で適用)
+			wabpm_gpu_step(G, n2);
+
+			// 中心行の強度を記録
+			wabpm_gpu_get_row(G, P->Ny / 2, Ed);  // Ed の先頭 Nx 要素を一時利用
+			for (long ix = 0; ix < Nx; ix++) {
+				Ixz[(iz - P->iz_start) * Nx + ix] = (float)thrust::norm(Ed[ix]);
+			}
+
+			*tdft += cputime() - t0;
+		}
+
+		// 最終電界・屈折率分布・出力電力を格納
+		wabpm_gpu_get_field(G, Ed);
+		double power = 0;
+		for (long i = 0; i < (long)Nx * Ny; i++) {
+			floatcomplex e = {(float)Ed[i].real(), (float)Ed[i].imag()};
+			P->Efinal[i] = e;
+			power += thrust::norm(Ed[i]);
+		}
+		P->precisePower = power;
+		for (int iy = 0; iy < Ny; iy++) {
+			for (int ix = 0; ix < Nx; ix++) {
+				long index = (long)(Nx * iy) + ix;
+				P->n_out[index] = n_mat[iEx[NA(ix, iy, P->iz_end - 1)]];
+			}
+		}
+		wabpm_gpu_destroy(G);
+		free(Ed);
+		free(n2);
+	}
+	else {
 	// デバイス側構造体の確保と転送 (E1, multiplier, n_in を転送し E2/Eyx/b/n_out を確保)
 	struct parameters *P_dev;
 	struct debug D_var = {{0.0, 0.0, 0.0}, {0, 0, 0}};
@@ -278,9 +367,6 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	int temp, nBlocks;
 	CUDA_CHECK(cudaOccupancyMaxPotentialBlockSize(&nBlocks, &temp, &substep1a, 0, 0));
 	dim3 blockDims(TILE_DIM, TILE_DIM, 1);
-
-	// HDF5ファイルの作成
-	file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
 	// BPM は時間反復ではなく Z 軸方向に 1 回伝搬する
 	for (long iz = P->iz_start; iz < P->iz_end; iz++) {
@@ -320,6 +406,7 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	// 最終電界 (デバイス側 E2) と屈折率分布を Efinal / n_out へ回収し、デバイスメモリを解放する
 	CUDA_CHECK(cudaDeviceSynchronize());
 	retrieveAndFreeDeviceStructs(P, P_dev, D, D_dev);
+	}
 
 	// result
 	if (io) {

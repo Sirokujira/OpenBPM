@@ -16,8 +16,9 @@ cmake --build build -j
 実行ファイルは `bin/` に出力されます (`obpm`, `obpm_post`)。
 
 - CUDA 版: `-DWITH_CUDA=ON` (要 CUDA Toolkit)
-  - `obpm_cuda` は CPU 版と同じ BPM 機能 (beam/refindex/導電率吸収/メッシュ警告) に対応しています。
-    屈折率分布は 3D 配列として一括でデバイスへ転送されます。
+  - `obpm_cuda` は CPU 版と同じ BPM 機能 (beam/refindex/導電率吸収/メッシュ警告/bend/
+    beamtilt、広角 `wideangle`・半ベクトル `polarization` を含む) に対応しています。
+    スカラー近軸は `bpm/FDBPMpropagator.cu`、広角/半ベクトルは `bpm/wabpm.cu` を使用します。
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI)
 
@@ -66,8 +67,8 @@ cmake --build build -j
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
 
-- `polarization` / `wideangle` 指定時は倍精度の一般化伝搬エンジン (`bpm/wabpm.cpp`) を使用します
-  (CPU 版のみ。CUDA 版は未対応でエラー終了します。`bend` との併用は不可)。
+- `polarization` / `wideangle` 指定時は倍精度の一般化伝搬エンジンを使用します
+  (CPU 版 `bpm/wabpm.cpp` / CUDA 版 `bpm/wabpm.cu`、同一アルゴリズム)。`bend` との併用は不可。
 
 - `feed` の電圧はビーム振幅として使用されます。
 - メッシュは等間隔を推奨します (不均一の場合は平均セル幅で計算し警告を表示)。
