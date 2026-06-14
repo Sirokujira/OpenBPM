@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一ブランチ/PR で新しい push があれば古い実行をキャンセル
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Smoke Test (Ubuntu, ${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            ninja-build \
+            libeigen3-dev \
+            libhdf5-dev \
+            libomp-dev
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Check artifacts
+        run: |
+          test -x bin/obpm
+          test -x bin/obpm_post
+          echo "Built executables:"
+          ls -l bin/
+
+      - name: Smoke test (run sample input)
+        run: |
+          ./bin/obpm data/waveguide.ofd
+          test -f time_series_data.h5
+          echo "Smoke test passed: time_series_data.h5 generated"
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openbpm-${{ matrix.compiler }}
+          path: |
+            bin/obpm
+            bin/obpm_post
+          if-no-files-found: warn
