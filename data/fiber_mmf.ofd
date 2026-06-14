@@ -1,0 +1,55 @@
+# OpenBPM sample : multimode optical fiber (GI ではなく SI-MMF)
+#
+# マルチモード光ファイバの動作シミュレーション (BPM)
+#   - コア   : 半径 a = 25um (直径 50um), NA = 0.2
+#              n_core = sqrt(n_clad^2 + NA^2) = 1.4578 (epsr = 2.125136)
+#   - クラッド: n_clad = 1.4440 (epsr = 2.085136)
+#   - 波長   : 1.55um
+#
+# 規格化周波数 V = 2*pi*a*NA/lambda = 20.3 >> 2.405 -> マルチモード
+# (伝搬モード数 ~ V^2/2 = 206)
+#
+# コア中心から 8um オフセットした励振により複数の LP モードが励振される。
+# ステップインデックスコア内は屈折率が均一なため、ビームはまず回折で
+# 自由に広がり、コア境界での全反射により閉じ込められて往復する。
+#
+# 期待される動作 (BPM のロジック確認ポイント, z = 600um 実測):
+#   1. 電界はコア (r < 25um) 内に閉じ込められたまま伝搬する
+#      (コア内電力割合 0.994, 全電力保存)
+#   2. コア境界での反射によりビーム重心がコア内を移動する
+#      (重心 x : +8um -> +2.6um @ z=600um)。さらに長距離では
+#      モード間干渉によりスペックル状の強度分布に発展する
+#   3. /field/n_out_r に直径 50um の円形コアが出力される
+OpenBPM 2 2
+title = multimode optical fiber (BPM sample)
+
+xmesh = -35e-6 140 35e-6
+ymesh = -35e-6 140 35e-6
+zmesh = 0 600 600e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>  (id starts at 2)
+# クラッド (n = 1.4440)
+material = 1 2.085136 0 1 0
+# コア (n = 1.4578, NA = 0.2)
+material = 1 2.125136 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -35e-6 35e-6 -35e-6 35e-6 0 600e-6
+# コア : Z 軸円柱 直径 50um
+geometry = 3 13 -25e-6 25e-6 -25e-6 25e-6 0 600e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> <x0[m]> <y0[m]> : コア中心から 8um オフセット励振
+beam = 5e-6 8e-6 0
+
+# refindex = <n0>
+refindex = 1.444
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

@@ -1,0 +1,32 @@
+# OpenBPM sample : uniform lossy medium (absorption test)
+# 導電率 sigma = 100 S/m の均一媒質中の伝搬減衰
+# 解析解 P(z)/P(0) = exp(-2*k0*n''*z), n'' = sigma/(2*n'*omega*eps0) との比較用
+# wavelength = 1.55um, z = 60um -> P/P0 = 0.209
+OpenBPM 2 2
+title = uniform lossy medium (BPM sample)
+
+xmesh = -10e-6 60 10e-6
+ymesh = -10e-6 60 10e-6
+zmesh = 0 60 60e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>  (esgm が複素屈折率の虚部=吸収に反映される)
+material = 1 2.085136 100 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -10e-6 10e-6 -10e-6 10e-6 0 60e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>  (ビーム中心・振幅として使用)
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> [<x0[m]> <y0[m]>] : ガウシアンビームウェスト(1/e^2強度半径)と中心
+beam = 5e-6
+
+# refindex = <n0> : BPM参照屈折率 (未指定時は領域中心の材料から自動取得)
+refindex = 1.444
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

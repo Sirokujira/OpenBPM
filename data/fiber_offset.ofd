@@ -1,0 +1,46 @@
+# OpenBPM sample : single-mode fiber, offset launch (調心ずれの結合損失)
+#
+# 光ファイバへの軸ずれ入射シミュレーション (BPM)
+# ファイバ構成は data/fiber.ofd と同一 (SMF-28 相当, LP01 のみ伝搬)。
+# 入射ガウシアンビームをコア中心から x 方向に +2um オフセットして励振する。
+#
+# 期待される動作 (BPM のロジック確認ポイント):
+#   1. 捕捉された電界はコア中心へ引き込まれ、ビーム重心がコア中心の
+#      周りで横方向に振動しながら伝搬する (z=200um で重心 x = -1.5um 程度)
+#   2. LP01 モードに結合する電力はガウシアン重なり積分
+#        eta = exp(-d^2/(2*w^2)) = exp(-(2um)^2/(2*(4.7um)^2)) = 0.91
+#      程度で、残り ~9% はクラッドへ放射され、十分長い伝搬距離で
+#      端部吸収体に吸収される (出力電力が ~0.91 倍へ漸近する)
+OpenBPM 2 2
+title = single-mode fiber offset launch (BPM sample)
+
+xmesh = -15e-6 90 15e-6
+ymesh = -15e-6 90 15e-6
+zmesh = 0 200 200e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>  (id starts at 2)
+# クラッド (n = 1.4440)
+material = 1 2.085136 0 1 0
+# コア (n = 1.4504)
+material = 1 2.103660 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -15e-6 15e-6 -15e-6 15e-6 0 200e-6
+geometry = 3 13 -4.1e-6 4.1e-6 -4.1e-6 4.1e-6 0 200e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> <x0[m]> <y0[m]>
+# コア中心から x 方向へ +2um オフセットした励振 (調心ずれの模擬)
+beam = 4.7e-6 2e-6 0
+
+# refindex = <n0>
+refindex = 1.444
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

@@ -1,0 +1,182 @@
+/*
+wabpm.cpp
+
+一般化 BPM 伝搬エンジン (広角 Pade(1,1) / 半ベクトル対応, CPU, 倍精度)
+
+  (1 + d+ * P) E^{n+1} = (1 + d- * P) E^n
+  P  = Px + Py
+  Px = Lx + (1/2) k0^2 (n^2 - n0^2)
+  Py = Ly + (1/2) k0^2 (n^2 - n0^2)
+
+  近軸      : d± = ±i dz/(4 k0 n0)
+  Pade(1,1) : d± = (1 ± i k0 n0 dz)/(4 k0^2 n0^2)
+              (∂E/∂z = -i k0 n0 [(X/2)/(1+X/4)] E, X = P/(k0 n0)^2
+               の Crank-Nicolson 離散化)
+
+ADI 分離:
+  T = (1 + d- Py) E      (陽的 y)
+  E = (1 + d- Px) T      (陽的 x)
+  (1 + d+ Px) E = E      (陰的 x : 行毎の三重対角)
+  (1 + d+ Py) E = E      (陰的 y : 列毎の三重対角)
+
+半ベクトル (Stern) 差分 : 偏波方向の 2 階微分を
+  d/dx[(1/n^2) d(n^2 E)/dx]_i
+  = [a_i E_{i-1} + b_i E_i + c_i E_{i+1}] / dx^2
+  a_i = 2 n^2_{i-1}/(n^2_i + n^2_{i-1})
+  c_i = 2 n^2_{i+1}/(n^2_i + n^2_{i+1})
+  b_i = -[2 n^2_i/(n^2_i + n^2_{i-1}) + 2 n^2_i/(n^2_i + n^2_{i+1})]
+で置き換える (重みには n^2 の実部を使用)。均一媒質では標準の
+ラプラシアン (1, -2, 1) に一致する。境界は Dirichlet (領域外 E = 0)。
+*/
+
+#include <complex>
+#include <cstdlib>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+#include "bpm/wabpm.h"
+
+typedef std::complex<double> cplx;
+
+// 偏波方向のステンシル重み (pol_dir = 1 なら Stern, 0 なら標準)
+static inline void stencil(int pol_dir, const cplx *n2, long i, long stride, long idx, long num,
+                           double *a, double *b, double *c)
+{
+	if (pol_dir) {
+		const double nc = n2[i].real();
+		const double nm = (idx > 0)       ? n2[i - stride].real() : nc;
+		const double np = (idx < num - 1) ? n2[i + stride].real() : nc;
+		*a = 2 * nm / (nc + nm);
+		*c = 2 * np / (nc + np);
+		*b = -((2 * nc / (nc + nm)) + (2 * nc / (nc + np)));
+	}
+	else {
+		*a = 1;
+		*b = -2;
+		*c = 1;
+	}
+}
+
+void wabpm_step(const wabpm_params *W, cplx *E, const cplx *n2)
+{
+	const long Nx = W->Nx;
+	const long Ny = W->Ny;
+	const long N = Nx * Ny;
+	const double idx2 = 1.0 / (W->dx * W->dx);
+	const double idy2 = 1.0 / (W->dy * W->dy);
+	const double k0 = W->k0;
+	const double n0 = W->n0;
+	const double n02 = n0 * n0;
+	const int polx = (W->pol == 1);
+	const int poly = (W->pol == 2);
+
+	cplx dp, dm;
+	if (W->wideangle) {
+		dp = cplx(1.0,  k0 * n0 * W->dz) / (4 * k0 * k0 * n02);
+		dm = cplx(1.0, -k0 * n0 * W->dz) / (4 * k0 * k0 * n02);
+	}
+	else {
+		dp = cplx(0.0,  W->dz / (4 * k0 * n0));
+		dm = cplx(0.0, -W->dz / (4 * k0 * n0));
+	}
+
+	cplx *T = new cplx[N];
+
+	// 陽的 y : T = (1 + dm*Py) E
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+	for (long iy = 0; iy < Ny; iy++) {
+		for (long ix = 0; ix < Nx; ix++) {
+			const long i = ix + iy * Nx;
+			double a, b, c;
+			stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
+			cplx lap = b * E[i];
+			if (iy > 0)      lap += a * E[i - Nx];
+			if (iy < Ny - 1) lap += c * E[i + Nx];
+			const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
+			T[i] = E[i] + dm * (lap * idy2 + V2 * E[i]);
+		}
+	}
+
+	// 陽的 x : E = (1 + dm*Px) T
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+	for (long iy = 0; iy < Ny; iy++) {
+		for (long ix = 0; ix < Nx; ix++) {
+			const long i = ix + iy * Nx;
+			double a, b, c;
+			stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
+			cplx lap = b * T[i];
+			if (ix > 0)      lap += a * T[i - 1];
+			if (ix < Nx - 1) lap += c * T[i + 1];
+			const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
+			E[i] = T[i] + dm * (lap * idx2 + V2 * T[i]);
+		}
+	}
+
+	// 陰的 x : (1 + dp*Px) E' = E を行毎に Thomas 法で解く
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+	{
+		cplx *cw = new cplx[Nx > Ny ? Nx : Ny];  // 前進消去した上対角
+#ifdef _OPENMP
+#pragma omp for
+#endif
+		for (long iy = 0; iy < Ny; iy++) {
+			cplx *e = &E[iy * Nx];
+			for (long ix = 0; ix < Nx; ix++) {
+				const long i = ix + iy * Nx;
+				double a, b, c;
+				stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
+				const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
+				const cplx sub  = dp * (a * idx2);
+				cplx       diag = 1.0 + dp * (b * idx2 + V2);
+				const cplx sup  = dp * (c * idx2);
+				if (ix > 0) {
+					// cw / e の前要素は対角で正規化済み (c', r')
+					diag  -= sub * cw[ix - 1];
+					e[ix] -= sub * e[ix - 1];
+				}
+				cw[ix] = sup / diag;
+				e[ix] /= diag;
+			}
+			for (long ix = Nx - 2; ix >= 0; ix--) {
+				e[ix] -= cw[ix] * e[ix + 1];
+			}
+		}
+
+		// 陰的 y : (1 + dp*Py) E' = E を列毎に Thomas 法で解く
+#ifdef _OPENMP
+#pragma omp for
+#endif
+		for (long ix = 0; ix < Nx; ix++) {
+			for (long iy = 0; iy < Ny; iy++) {
+				const long i = ix + iy * Nx;
+				double a, b, c;
+				stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
+				const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
+				const cplx sub  = dp * (a * idy2);
+				cplx       diag = 1.0 + dp * (b * idy2 + V2);
+				const cplx sup  = dp * (c * idy2);
+				if (iy > 0) {
+					// cw / E の前要素は対角で正規化済み (c', r')
+					diag -= sub * cw[iy - 1];
+					E[i] -= sub * E[i - Nx];
+				}
+				cw[iy] = sup / diag;
+				E[i] /= diag;
+			}
+			for (long iy = Ny - 2; iy >= 0; iy--) {
+				E[ix + iy * Nx] -= cw[iy] * E[ix + (iy + 1) * Nx];
+			}
+		}
+
+		delete[] cw;
+	}
+
+	delete[] T;
+}

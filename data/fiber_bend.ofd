@@ -1,0 +1,53 @@
+# OpenBPM sample : bent fiber (曲げ損失 / マクロベンド)
+#
+# 光ファイバの曲げ損失シミュレーション (BPM, 等価屈折率法)
+#   - 構成は data/fiber.ofd と同一 (SMF-28 相当, LP01 のみ伝搬)
+#   - 曲げ半径 RoC = 2mm を bend キーワードで指定 (+x 方向に曲げ)
+#
+# 等価屈折率法では曲げを直線導波路 + 屈折率の傾斜
+#   n_eq(x) = n(x) * exp(x/RoC)
+# に置き換える。曲げ外側 (+x) でクラッド等価屈折率がモードの実効屈折率
+# n_eff (~1.4467) を超える転回点
+#   x_turn = (n_eff - n_clad)/n_clad * RoC = ~3.5um
+# より外側へモードのテールがトンネルし、放射として漏れ続ける。
+#
+# 期待される動作 (BPM のロジック確認ポイント, z = 400um 実測):
+#   1. モード分布が曲げ外側 (+x) へシフトする (重心 +5.8um)
+#   2. 転回点から外側へ電力が漏れ続け、直線ファイバ (data/fiber.ofd,
+#      電力保存 1.000) に対して出力電力が減衰する (P/P0 = 0.988)
+#   3. /field/Ixz の伝搬マップで +x 側への放射のしみ出しが見える
+OpenBPM 2 2
+title = bent fiber RoC=2mm (BPM sample)
+
+xmesh = -15e-6 90 15e-6
+ymesh = -15e-6 90 15e-6
+zmesh = 0 400 400e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>
+# クラッド (n = 1.4440)
+material = 1 2.085136 0 1 0
+# コア (n = 1.4504)
+material = 1 2.103660 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -15e-6 15e-6 -15e-6 15e-6 0 400e-6
+geometry = 3 13 -4.1e-6 4.1e-6 -4.1e-6 4.1e-6 0 400e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> : LP01 に整合した励振
+beam = 4.7e-6
+
+# refindex = <n0>
+refindex = 1.444
+
+# bend = <RoC[m]> [<direction[deg]> [<rho_e>]] : 曲げ半径 2mm, +x 方向
+bend = 2e-3 0
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

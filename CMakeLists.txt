@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18.3)
 
 project(openBPM
   DESCRIPTION "A free and open source BPM solver"
-  LANGUAGES C CXX CUDA)
+  LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -14,6 +14,7 @@ find_package (Eigen3 3.3 REQUIRED)
 # CUDA を使用するかどうかを設定するオプションを追加
 option(WITH_CUDA "Enable CUDA support" OFF)
 if(WITH_CUDA)
+    enable_language(CUDA)
     #set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
     message(STATUS ${CMAKE_CUDA_COMPILER})
     message(STATUS ${CMAKE_CUDA_HOST_COMPILER})
@@ -276,7 +277,7 @@ if (WITH_CUDA)
 
             #add_executable(obpm_cuda ${CUDA_SOURCES} src/cuda_Main.cu)
             #add_executable(obpm_cuda ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
-            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu src/cuda_Main.cu)
+            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu bpm/wabpm.cu src/cuda_Main.cu)
             #add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
 
             target_include_directories(obpm_cuda PUBLIC "${PROJECT_SOURCE_DIR}/include")
@@ -404,7 +405,7 @@ else()
         target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
     else ()
         #add_executable(obpm ${SOURCES} sol/solve_bpm.cpp src/sol_Main.c)
-        add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c sol/solve_bpm.cpp src/sol_Main.cpp)
+        add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c bpm/wabpm.cpp sol/solve_bpm.cpp src/sol_Main.cpp)
         #target_link_libraries(obpm glfw)
         #target_link_libraries(obpm OpenGL::GL)
 

@@ -212,6 +212,19 @@ EXTERN struct {
 	double converg;           // convergence
 } Solver;                     // solver
 
+EXTERN struct {
+	double w0;                // gaussian beam waist (1/e^2 intensity radius) [m] (0 = auto)
+	double x0, y0;            // beam center [m]
+	int    center;            // 1 = beam center specified by input
+	double n0;                // reference refractive index (0 = auto)
+	double RoC;               // bend radius of curvature [m] (0 = straight)
+	double bendDir;           // bend direction [deg] (0 = +x)
+	double rho_e;             // effective elasto-optic coefficient
+	int    pol;               // polarization: 0 = scalar, 1 = x (semivectorial), 2 = y
+	int    wideangle;         // 0 = paraxial, 1 = wide-angle Pade(1,1)
+	double tiltx, tilty;      // beam tilt angle [deg]
+} BPM;                        // BPM (beam propagation method)
+
 typedef struct {
 	int jhy_x[2], khy_x[2], jhz_x[2], khz_x[2], numhy_x, numhz_x, ip[4];
 	int khz_y[2], ihz_y[2], khx_y[2], ihx_y[2], numhz_y, numhx_y, jp[4];

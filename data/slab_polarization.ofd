@@ -1,0 +1,55 @@
+# OpenBPM sample : semivectorial BPM (半ベクトル BPM, 偏波依存)
+#
+# 高コントラストスラブ導波路 (コア n1 = 2.0 厚さ 0.4um / クラッド n2 = 1.0)
+# の偏波依存伝搬。界面は x に垂直。
+#
+#   polarization = x : Ex 偏波 (TM 的)。界面で D 法線成分連続のため
+#                      電界が不連続になる (Ex(外)/Ex(内) = n1^2/n2^2 = 4)。
+#                      Stern の半ベクトル差分で表現される。
+#   polarization = y : Ey 偏波 (TE 的)。界面で電界連続 (スカラーと等価)。
+#
+#   界面を挟む隣接セルの振幅比 (dx = 0.025um, z 平均, 解析値 / 実測):
+#     TE (pol=y) : 0.876 / 0.875
+#     TM (pol=x) : 3.227 / 3.135
+#
+# 期待される動作 (BPM のロジック確認ポイント):
+#   1. polarization = x ではコア界面で電界がジャンプする
+#      (最終断面または /field/Ixz の z 平均で確認)
+#   2. polarization = y に変更するとジャンプが消え連続になる
+#   3. TE/TM で実効屈折率・閉じ込めが異なる (偏波依存)
+OpenBPM 2 2
+title = high-contrast slab polarization (BPM sample)
+
+xmesh = -4e-6 320 4e-6
+ymesh = -5e-6 40 5e-6
+zmesh = 0 4000 400e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>
+# クラッド (n = 1.0)
+material = 1 1.0 0 1 0
+# コア (n = 2.0)
+material = 1 4.0 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -4e-6 4e-6 -5e-6 5e-6 0 400e-6
+# スラブコア : x = -0.2 - +0.2um (y 方向は一様)
+geometry = 3 1 -0.2e-6 0.2e-6 -5e-6 5e-6 0 400e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]>
+beam = 0.4e-6
+
+# polarization = <scalar|x|y> : 半ベクトル BPM の偏波方向
+polarization = x
+
+# refindex = <n0>
+refindex = 1.5
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end
