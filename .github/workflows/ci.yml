@@ -60,11 +60,15 @@ jobs:
           echo "Built executables:"
           ls -l bin/
 
-      - name: Smoke test (run sample input)
+      - name: Smoke test (run sample inputs)
         run: |
-          ./bin/obpm data/waveguide.ofd
-          test -f time_series_data.h5
-          echo "Smoke test passed: time_series_data.h5 generated"
+          for f in data/*.ofd; do
+            echo "=== $f ==="
+            rm -f time_series_data.h5
+            ./bin/obpm "$f"
+            test -f time_series_data.h5
+          done
+          echo "Smoke test passed: all sample inputs produced time_series_data.h5"
 
       - name: Upload build artifacts
         if: always()
