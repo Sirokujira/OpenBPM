@@ -342,7 +342,6 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/initfield.c
             ${CMAKE_SOURCE_DIR}/sol/input_data.c
             ${CMAKE_SOURCE_DIR}/sol/input2.c
-            ${CMAKE_SOURCE_DIR}/sol/Makefile
             ${CMAKE_SOURCE_DIR}/sol/memallocfree1.c
             ${CMAKE_SOURCE_DIR}/sol/memallocfree2.c
             ${CMAKE_SOURCE_DIR}/sol/memallocfree3.c
@@ -372,7 +371,6 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/setupMurHx.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHy.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHz.c
-            ${CMAKE_SOURCE_DIR}/sol/setupNear.c_
             ${CMAKE_SOURCE_DIR}/sol/setupPml.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEx.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEy.c

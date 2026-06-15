@@ -57,5 +57,14 @@ bin/
 
 # Simulation outputs
 obpm.log
+obpm.out
 time_series_data.h5
 *.h5
+
+# Post-processing outputs
+*.ev2
+*.ev3
+
+# Python
+__pycache__/
+*.pyc

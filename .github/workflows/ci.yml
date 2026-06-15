@@ -13,8 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # --- 既定 (CPU) ビルド: コンパイラ横断のコンパイルチェック + 軽量スモーク ---
   build:
-    name: Build & Smoke Test (Ubuntu, ${{ matrix.compiler }})
+    name: Build (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,28 +28,20 @@ jobs:
           - compiler: clang
             cc: clang
             cxx: clang++
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake \
-            ninja-build \
-            libeigen3-dev \
-            libhdf5-dev \
-            libomp-dev
+            cmake ninja-build libeigen3-dev libhdf5-dev libomp-dev
 
       - name: Configure
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j
@@ -57,25 +50,117 @@ jobs:
         run: |
           test -x bin/obpm
           test -x bin/obpm_post
-          echo "Built executables:"
           ls -l bin/
 
-      - name: Smoke test (run sample inputs)
+      - name: Smoke test (single sample)
         run: |
-          for f in data/*.ofd; do
-            echo "=== $f ==="
-            rm -f time_series_data.h5
-            ./bin/obpm "$f"
-            test -f time_series_data.h5
-          done
-          echo "Smoke test passed: all sample inputs produced time_series_data.h5"
+          ./bin/obpm data/waveguide.ofd
+          test -f time_series_data.h5
 
-      - name: Upload build artifacts
-        if: always()
+  # --- 全サンプル実行 + obpm_post E2E + 数値回帰テスト (gcc, 1回のみ) ---
+  regression:
+    name: Numerical regression
+    runs-on: ubuntu-latest
+    env:
+      # 数値の再現性のため単一スレッドで実行する
+      OMP_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build libeigen3-dev libhdf5-dev libomp-dev \
+            python3 python3-venv
+
+      - name: Set up Python (h5py, numpy)
+        run: |
+          python3 -m venv .venv
+          ./.venv/bin/pip install --upgrade pip
+          ./.venv/bin/pip install h5py numpy
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+
+      - name: Run all samples, obpm_post E2E and regression check
+        run: |
+          mkdir -p ci-logs
+          fail=0
+          for f in data/*.ofd; do
+            name=$(basename "$f" .ofd)
+            echo "::group::$name"
+            rm -f time_series_data.h5 obpm.out
+            # solver (also produces obpm.out for the post tool)
+            if ! ./bin/obpm "$f" > "ci-logs/$name.solver.log" 2>&1; then
+              echo "solver FAILED: $name"; fail=1; echo "::endgroup::"; continue
+            fi
+            test -f time_series_data.h5 || { echo "no h5: $name"; fail=1; echo "::endgroup::"; continue; }
+            # numerical regression vs committed reference
+            if ! ./.venv/bin/python tests/regression/check_regression.py \
+                   --name "$name" --h5 time_series_data.h5; then
+              fail=1
+            fi
+            # post-processing end-to-end (reads the .ofd + obpm.out)
+            if ! ./bin/obpm_post "$f" > "ci-logs/$name.post.log" 2>&1; then
+              echo "obpm_post FAILED: $name"; fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      - name: Upload logs on failure
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: openbpm-${{ matrix.compiler }}
-          path: |
-            bin/obpm
-            bin/obpm_post
+          name: regression-logs
+          path: ci-logs/
           if-no-files-found: warn
+
+  # --- MPI ビルド検証 (build-only, 並列 HDF5 が必要) ---
+  mpi-build:
+    name: MPI build (build-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build libeigen3-dev libomp-dev \
+            libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
+
+      - name: Configure & build (WITH_MPI=ON)
+        run: |
+          cmake -S . -B build-mpi -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_MPI=ON -DHDF5_PREFER_PARALLEL=ON -DWITH_POST=OFF
+          cmake --build build-mpi -j
+
+      - name: Check artifacts
+        run: test -x bin/obpm_mpi
+
+  # --- CUDA ビルド検証 (build-only, GPU 不要) ---
+  cuda-build:
+    name: CUDA build (build-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build libeigen3-dev libhdf5-dev libomp-dev \
+            nvidia-cuda-toolkit
+
+      - name: Configure & build (WITH_CUDA=ON)
+        run: |
+          cmake -S . -B build-cuda -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_CUDA=ON -DWITH_POST=OFF
+          cmake --build build-cuda -j
+
+      - name: Check artifacts
+        run: test -x bin/obpm_cuda
