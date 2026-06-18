@@ -1,24 +1,47 @@
 name: CI
+# ============================================================
+# OpenBPM GitHub Actions CI ワークフロー
+#
+# 4 つのジョブで構成:
+#   build       : gcc / clang マトリクスでのコンパイルチェック + 軽量スモーク
+#   regression  : 全 15 サンプルの実行 + 数値回帰 + obpm_post E2E (gcc 1 回のみ)
+#   mpi-build   : -DWITH_MPI=ON の build-only 検証 (並列 HDF5 が必要)
+#   cuda-build  : -DWITH_CUDA=ON の build-only 検証 (GPU 不要, nvcc のみ)
+#
+# 依存ライブラリ一覧:
+#   共通      : CMake ≥3.18, Eigen3, HDF5 (直列), OpenMP
+#   MPI 版    : OpenMPI, HDF5 (並列: libhdf5-openmpi-dev)
+#   CUDA 版   : nvidia-cuda-toolkit (Ubuntu 同梱 12.0, build-only)
+# ============================================================
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
+  workflow_dispatch:  # 手動実行を許可
 
-# 同一ブランチ/PR で新しい push があれば古い実行をキャンセル
+# 同一ブランチ/PR に新しい push があれば古い実行をキャンセルして無駄な課金を防ぐ
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # --- 既定 (CPU) ビルド: コンパイラ横断のコンパイルチェック + 軽量スモーク ---
+  # ============================================================
+  # build: gcc / clang 2 コンパイラでコンパイルチェックを行う
+  #
+  # 目的:
+  #   - コンパイラ固有の警告・エラーを早期に検出する
+  #   - リリースビルドが両コンパイラで通ることを保証する
+  #   - 短い waveguide.ofd スモークで実行可否を確認する
+  #
+  # 数値回帰はここでは行わない (重い全サンプル実行は regression ジョブ)
+  # ============================================================
   build:
     name: Build (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: false   # 片方のコンパイラが失敗しても他方を継続する
       matrix:
         compiler: [gcc, clang]
         include:
@@ -34,6 +57,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          # --no-install-recommends で推奨パッケージを除外し導入時間を短縮する
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build libeigen3-dev libhdf5-dev libomp-dev
 
@@ -47,22 +71,41 @@ jobs:
         run: cmake --build build -j
 
       - name: Check artifacts
+        # 実行ファイルが期待どおりのパスに生成されているか確認する
         run: |
           test -x bin/obpm
           test -x bin/obpm_post
           ls -l bin/
 
       - name: Smoke test (single sample)
+        # waveguide.ofd は最も軽い基本サンプル (~0.2 s)
+        # time_series_data.h5 が生成されることで solver の実行完了を確認する
         run: |
           ./bin/obpm data/waveguide.ofd
           test -f time_series_data.h5
 
-  # --- 全サンプル実行 + obpm_post E2E + 数値回帰テスト (gcc, 1回のみ) ---
+  # ============================================================
+  # regression: 全サンプル実行 + 数値回帰チェック + obpm_post E2E
+  #
+  # 目的:
+  #   - 全 15 サンプルの solver が正常終了することを確認する
+  #   - h5 出力の数値指標 (電力, ピーク, 重心, ビーム幅) が
+  #     committed golden 値から 1% 以内であることを検証する
+  #   - freespace / tilt_wideangle サンプルについては解析理論値とも比較する
+  #   - obpm_post が solver の出力 (obpm.out) を読み込めることを検証する
+  #
+  # 数値再現性:
+  #   OMP の並列化でスレッド間の浮動小数点演算順序が変わるため,
+  #   OMP_NUM_THREADS=1 を強制して golden 値との bit 一致を保証する
+  #
+  # gcc 1 回のみ実行 (build ジョブがコンパイラ差異を既にカバーするため二重実行しない)
+  # ============================================================
   regression:
     name: Numerical regression
     runs-on: ubuntu-latest
     env:
-      # 数値の再現性のため単一スレッドで実行する
+      # OMP_NUM_THREADS=1 にしないと浮動小数点演算の加算順序がスレッド数依存で変わり,
+      # golden 値と一致しなくなる
       OMP_NUM_THREADS: "1"
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +118,8 @@ jobs:
             python3 python3-venv
 
       - name: Set up Python (h5py, numpy)
+        # Ubuntu の python3-h5py パッケージは serial/mpi 自動選択の循環インポートバグが
+        # あるため, pip wheel (HDF5 同梱) を venv で入れる
         run: |
           python3 -m venv .venv
           ./.venv/bin/pip install --upgrade pip
@@ -86,6 +131,13 @@ jobs:
           cmake --build build -j
 
       - name: Run all samples, obpm_post E2E and regression check
+        # 処理の流れ (サンプルごとに繰り返す):
+        #   1. obpm でシミュレーション実行 → time_series_data.h5 / obpm.out を生成
+        #   2. check_regression.py で h5 の数値を golden 値と照合
+        #   3. obpm_post で後処理 (obpm.out を読み込む E2E テスト)
+        #
+        # ::group:: / ::endgroup:: は GitHub UI でサンプルごとにログを折り畳む
+        # 1 サンプルが失敗しても全サンプルを実行してから fail=1 で終了する
         run: |
           mkdir -p ci-logs
           fail=0
@@ -93,25 +145,30 @@ jobs:
             name=$(basename "$f" .ofd)
             echo "::group::$name"
             rm -f time_series_data.h5 obpm.out
-            # solver (also produces obpm.out for the post tool)
+
+            # --- solver ---
             if ! ./bin/obpm "$f" > "ci-logs/$name.solver.log" 2>&1; then
               echo "solver FAILED: $name"; fail=1; echo "::endgroup::"; continue
             fi
             test -f time_series_data.h5 || { echo "no h5: $name"; fail=1; echo "::endgroup::"; continue; }
-            # numerical regression vs committed reference
+
+            # --- 数値回帰チェック (tests/regression/check_regression.py) ---
             if ! ./.venv/bin/python tests/regression/check_regression.py \
                    --name "$name" --h5 time_series_data.h5; then
               fail=1
             fi
-            # post-processing end-to-end (reads the .ofd + obpm.out)
+
+            # --- obpm_post E2E (.ofd と obpm.out の両方を読む) ---
             if ! ./bin/obpm_post "$f" > "ci-logs/$name.post.log" 2>&1; then
               echo "obpm_post FAILED: $name"; fail=1
             fi
+
             echo "::endgroup::"
           done
           exit $fail
 
       - name: Upload logs on failure
+        # 失敗時にのみ各サンプルのログをアーティファクトとして保存する
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -119,7 +176,18 @@ jobs:
           path: ci-logs/
           if-no-files-found: warn
 
-  # --- MPI ビルド検証 (build-only, 並列 HDF5 が必要) ---
+  # ============================================================
+  # mpi-build: MPI 版 (obpm_mpi) のビルド検証 (build-only)
+  #
+  # 目的:
+  #   - mpi/ 配下のコードが知らない間に壊れるのを防ぐ
+  #   - MPI 版は並列 HDF5 (H5Pset_fapl_mpio など) を使用するため,
+  #     通常の libhdf5-dev ではリンクに失敗する → libhdf5-openmpi-dev が必要
+  #   - GPU/MPIクラスタ実行環境が CI にないため実行は行わない
+  #
+  # 注意: WITH_POST=OFF にしているのは obpm_post が直列 HDF5 を前提とするため
+  #       MPI 版と同一ビルドツリーで混在するとリンクエラーになるため
+  # ============================================================
   mpi-build:
     name: MPI build (build-only)
     runs-on: ubuntu-latest
@@ -131,18 +199,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build libeigen3-dev libomp-dev \
-            libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
+            libopenmpi-dev openmpi-bin \
+            libhdf5-openmpi-dev   # 並列 HDF5: H5Pset_fapl_mpio などに必要
 
       - name: Configure & build (WITH_MPI=ON)
         run: |
           cmake -S . -B build-mpi -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_MPI=ON -DHDF5_PREFER_PARALLEL=ON -DWITH_POST=OFF
+            -DWITH_MPI=ON \
+            -DHDF5_PREFER_PARALLEL=ON \  # openmpi 版の HDF5 を優先して選択させる
+            -DWITH_POST=OFF
           cmake --build build-mpi -j
 
       - name: Check artifacts
         run: test -x bin/obpm_mpi
 
-  # --- CUDA ビルド検証 (build-only, GPU 不要) ---
+  # ============================================================
+  # cuda-build: CUDA 版 (obpm_cuda) のビルド検証 (build-only)
+  #
+  # 目的:
+  #   - cuda/ / bpm/*.cu 配下のコードが知らない間に壊れるのを防ぐ
+  #   - Ubuntu 同梱の nvidia-cuda-toolkit (12.0) を使用する
+  #   - GitHub Actions の ubuntu-latest ランナーには GPU が搭載されていないため
+  #     ビルドのみ行い実行は行わない (GPU の有無は check_gpu.cu が実行時に検出)
+  #
+  # 注意: CUDA 版は CMAKE_CUDA_ARCHITECTURES=60 (Pascal 世代) でビルドされる
+  #       (CMakeLists.txt の設定値)。より新しいアーキテクチャで実行する場合は
+  #       ビルド時に値を変更すること。
+  # ============================================================
   cuda-build:
     name: CUDA build (build-only)
     runs-on: ubuntu-latest
@@ -154,12 +237,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build libeigen3-dev libhdf5-dev libomp-dev \
-            nvidia-cuda-toolkit
+            nvidia-cuda-toolkit   # nvcc 12.0 を含む
 
       - name: Configure & build (WITH_CUDA=ON)
         run: |
           cmake -S . -B build-cuda -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_CUDA=ON -DWITH_POST=OFF
+            -DWITH_CUDA=ON \
+            -DWITH_POST=OFF
           cmake --build build-cuda -j
 
       - name: Check artifacts

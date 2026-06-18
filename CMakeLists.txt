@@ -325,7 +325,12 @@ if (WITH_CUDA)
     endif()
 else()
     if(WITH_MPI)
-        #solve.c reject
+        # MPI 版のソースリスト
+        # 注意: sol/solve.c は CPU 版専用のシングルプロセス solver であり
+        #       MPI 版では mpi/solve.c に置き換えられるためここには含めない。
+        # 除外済みエントリ (誤って追加されていた非ソースファイル):
+        #   sol/Makefile    : ソースファイルではなく CMake configure 時にエラーになる
+        #   sol/setupNear.c_: 拡張子が .c_ であり存在しないファイル
         set(SOURCES3
             ${CMAKE_SOURCE_DIR}/sol/average.c
             ${CMAKE_SOURCE_DIR}/sol/cputime.c
