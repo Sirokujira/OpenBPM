@@ -65,10 +65,14 @@ jobs:
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWITH_TESTS=ON
 
       - name: Build
         run: cmake --build build -j
+
+      - name: Unit tests (ctest)
+        # OMP_NUM_THREADS=1 で浮動小数点演算順序を固定し再現性を保証する
+        run: OMP_NUM_THREADS=1 ctest --test-dir build -V
 
       - name: Check artifacts
         # 実行ファイルが期待どおりのパスに生成されているか確認する

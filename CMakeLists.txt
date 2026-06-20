@@ -4,6 +4,13 @@ project(openBPM
   DESCRIPTION "A free and open source BPM solver"
   LANGUAGES C CXX)
 
+# CTest を有効にする。enable_testing() はプロジェクト直下で呼ぶ必要がある。
+# WITH_TESTS=OFF で無効化できる (CUDA/MPI ビルドでは自動で OFF になる)。
+option(WITH_TESTS "Enable unit tests (requires CPU-only build)" ON)
+if(WITH_TESTS AND NOT WITH_CUDA AND NOT WITH_MPI)
+    enable_testing()
+endif()
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -475,3 +482,44 @@ endif()
 #    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m HDF5::HDF5)
 #
 #endif()
+
+# ============================================================
+# 単体テスト (WITH_TESTS=ON かつ CPU-only ビルド時のみ有効)
+#
+# 対象:
+#   test_wabpm    – wabpm_step() の物理的性質を検証 (bpm/wabpm.cpp)
+#   test_bpmmodel – BPMModel クラスのグリッド計算を検証 (bpm/model.cpp)
+#
+# 実行方法:
+#   cmake --build build -j && ctest --test-dir build -V
+# ============================================================
+if(WITH_TESTS AND NOT WITH_CUDA AND NOT WITH_MPI)
+
+    # --- test_wabpm ---
+    # wabpm_step() の 6 テスト:
+    #   パワー保存 (近軸/広角/半ベクトル), x 対称性, ガウシアン回折, チルト変位
+    add_executable(test_wabpm
+        tests/unit/test_wabpm.cpp
+        bpm/wabpm.cpp
+    )
+    target_include_directories(test_wabpm PUBLIC "${PROJECT_SOURCE_DIR}/include")
+    # wabpm.cpp は OpenMP でスレッド並列化しているがテストは OMP_NUM_THREADS=1 で実行
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(test_wabpm PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    target_link_libraries(test_wabpm PRIVATE m)
+    # CTest に登録: テスト名 "wabpm", 単一スレッドで実行
+    add_test(NAME wabpm COMMAND test_wabpm)
+    set_tests_properties(wabpm PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    # --- test_bpmmodel ---
+    # BPMModel の 8 テスト:
+    #   dx/dy, Nx/Ny, Nz, Lx/Ly, dz, グリッド配列, name
+    add_executable(test_bpmmodel
+        tests/unit/test_bpmmodel.cpp
+        bpm/model.cpp
+    )
+    target_include_directories(test_bpmmodel PUBLIC "${PROJECT_SOURCE_DIR}/include")
+    add_test(NAME bpmmodel COMMAND test_bpmmodel)
+
+endif()
