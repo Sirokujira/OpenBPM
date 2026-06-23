@@ -451,6 +451,24 @@ if (WITH_POST)
 
 endif()
 
+# ---------------------------------------------------------------
+# テスト (BPM 伝搬カーネル wabpm_step の解析解検証)
+#   cmake -S . -B build -DWITH_TESTS=ON
+#   cmake --build build && ctest --test-dir build --output-on-failure
+# ---------------------------------------------------------------
+option(WITH_TESTS "Build unit tests" OFF)
+if (WITH_TESTS)
+    enable_testing()
+
+    add_executable(test_wabpm tests/test_wabpm.cpp bpm/wabpm.cpp)
+    target_include_directories(test_wabpm PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    if (OpenMP_CXX_FOUND)
+        target_link_libraries(test_wabpm PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+
+    add_test(NAME wabpm_unit COMMAND test_wabpm)
+endif()
+
 #custom viewer
 #option(WITH_HMI "Enable HMI Tool" ON)
 #if (WITH_HMI)

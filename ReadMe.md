@@ -22,6 +22,21 @@ cmake --build build -j
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI)
 
+## テスト
+
+BPM 伝搬カーネル (`bpm/wabpm.cpp` の `wabpm_step`) を解析解と比較する単体テストを
+`tests/` に用意しています。Eigen3/HDF5 に依存せず OpenMP のみで動作します。
+
+```sh
+cmake -S . -B build -DWITH_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+検証項目: 自由空間ガウシアン回折 `w(z)=w0*sqrt(1+(z/zR)^2)` (近軸/広角)、
+損失なし媒質でのエネルギー保存、一様吸収媒質の強度減衰 `exp(-2*k0*n''*z)`、
+半ベクトル差分が一様媒質でスカラーに帰着すること。
+
 ## 実行
 
 入力データは OpenFDTD 形式です。BPM を適用したサンプル (波長 1.55um):
