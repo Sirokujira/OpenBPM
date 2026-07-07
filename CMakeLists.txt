@@ -14,6 +14,8 @@ find_package (Eigen3 3.3 REQUIRED)
 # CUDA を使用するかどうかを設定するオプションを追加
 option(WITH_CUDA "Enable CUDA support" OFF)
 if(WITH_CUDA)
+    # CUDA は WITH_CUDA=ON のときだけ有効化する (nvcc の無い環境・CI でも
+    # CPU 版をビルドできるようにする)
     enable_language(CUDA)
     #set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
     message(STATUS ${CMAKE_CUDA_COMPILER})
