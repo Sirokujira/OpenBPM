@@ -242,13 +242,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // ============================================================
         // 拡張パス : 広角 BPM (Pade(1,1)) / 半ベクトル BPM (倍精度)
         // 屈折率項を演算子の内部に含めるため、位相 multiplier ではなく
-        // 一般化 ADI (bpm/wabpm.cpp) で伝搬する。曲げは未対応。
+        // 一般化 ADI (bpm/wabpm.cpp) で伝搬する。曲げは等価屈折率法で
+        // n2 スライスへ反映する (近軸パスと同じ変換、実部のみ)。
         // ============================================================
-        if (BPM.RoC > 0) {
-            sprintf(str, "*** warning : bend is ignored in wideangle/polarization mode.");
-            if (io) fprintf(fp, "%s\n", str);
-            fprintf(stdout, "%s\n", str);
-        }
         sprintf(str, "mode : %s, polarization = %s",
                 (BPM.wideangle ? "wide-angle Pade(1,1)" : "paraxial"),
                 (BPM.pol == 1 ? "x (semivectorial)" : (BPM.pol == 2 ? "y (semivectorial)" : "scalar")));
@@ -269,6 +265,12 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         std::complex<double> *Ed = new std::complex<double>[(size_t)Nx * Ny];
         std::complex<double> *n2 = new std::complex<double>[(size_t)Nx * Ny];
 
+        // 曲げ (等価屈折率法) : n_bend = n*(1 - n^2*xb*rho_e/(2*RoC))*exp(xb/RoC)
+        // (xb = x*cos(dir) + y*sin(dir), 吸収 = 虚部は変換しない)
+        const int  bend = (BPM.RoC > 0);
+        const double cosB = bend ? cos(BPM.bendDir * DTOR) : 1.0;
+        const double sinB = bend ? sin(BPM.bendDir * DTOR) : 0.0;
+
         // 初期電界 (チルト位相込みの E1) を倍精度へ
         for (long i = 0; i < (long)Nx * Ny; i++) {
             Ed[i] = std::complex<double>(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
@@ -286,7 +288,15 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                     long index = (long)(P->Nx * iy) + ix;
                     int64_t nn = NA(ix, iy, iz);
                     const floatcomplex nm = n_mat[iEx[nn]];
-                    std::complex<double> n(CREALF(nm), -CIMAGF(nm));
+                    double nr = CREALF(nm);
+                    if (bend) {
+                        const double x = P->dx * (ix - (P->Nx - 1) / 2.0);
+                        const double y = P->dy * (iy - (P->Ny - 1) / 2.0);
+                        const double xb = x * cosB + y * sinB;
+                        nr = nr * (1.0 - nr * nr * xb * BPM.rho_e / (2.0 * BPM.RoC))
+                                * exp(xb / BPM.RoC);
+                    }
+                    std::complex<double> n(nr, -CIMAGF(nm));
                     n2[index] = n * n;
                 }
             }

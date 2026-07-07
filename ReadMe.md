@@ -22,10 +22,16 @@ cmake --build build -j
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI)
 
+## モード解析
+
+虚軸伝搬法 (imaginary-distance BPM) + Gram-Schmidt 直交化によるモードソルバを
+`bpm/modes.cpp` (`wabpm_find_modes`) に実装しています。実効屈折率の降順に導波モードを
+求め、neff は Rayleigh 商から算出します。`include/bpm/allset.hpp` の `findModes()`
+(BPM-MATLAB 互換 API) はこのソルバを使用します。
+
 ## テスト
 
-BPM 伝搬カーネル (`bpm/wabpm.cpp` の `wabpm_step`) を解析解と比較する単体テストを
-`tests/` に用意しています。Eigen3/HDF5 に依存せず OpenMP のみで動作します。
+解析解と比較する単体テストを `tests/` に用意しています。
 
 ```sh
 cmake -S . -B build -DWITH_TESTS=ON
@@ -33,9 +39,11 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-検証項目: 自由空間ガウシアン回折 `w(z)=w0*sqrt(1+(z/zR)^2)` (近軸/広角)、
-損失なし媒質でのエネルギー保存、一様吸収媒質の強度減衰 `exp(-2*k0*n''*z)`、
-半ベクトル差分が一様媒質でスカラーに帰着すること。
+| テスト | 検証項目 |
+|---|---|
+| `test_wabpm` | 自由空間ガウシアン回折 `w(z)=w0*sqrt(1+(z/zR)^2)` (近軸/広角)、エネルギー保存、吸収減衰 `exp(-2*k0*n''*z)`、曲げ偏向 `<x>=z^2/(2*RoC)`、半ベクトル差分の一様媒質整合 |
+| `test_modes` | ステップインデックスファイバ LP01/LP11 の実効屈折率 (分散方程式の厳密解と比較)、モード直交性 |
+| `test_allset` | `findModes` / `modeSuperposition` / `offsetField` / `tiltField` (P_Struct API) |
 
 ## 実行
 
@@ -83,7 +91,8 @@ ctest --test-dir build --output-on-failure
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
 
 - `polarization` / `wideangle` 指定時は倍精度の一般化伝搬エンジンを使用します
-  (CPU 版 `bpm/wabpm.cpp` / CUDA 版 `bpm/wabpm.cu`、同一アルゴリズム)。`bend` との併用は不可。
+  (CPU 版 `bpm/wabpm.cpp` / CUDA 版 `bpm/wabpm.cu`、同一アルゴリズム)。
+  `bend` との併用も可能です (等価屈折率法を屈折率分布に反映)。
 
 - `feed` の電圧はビーム振幅として使用されます。
 - メッシュは等間隔を推奨します (不均一の場合は平均セル幅で計算し警告を表示)。

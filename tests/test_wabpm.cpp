@@ -183,6 +183,57 @@ static void test_absorption()
     check_close("absorption_decay", p1 / p0, ratio_ana, 0.02);
 }
 
+// 曲げ (等価屈折率法) : 一様媒質 + n(x) = n0*exp(x/RoC) では
+// ビーム重心が円弧 (レイ) を描く : <x>(z) = z^2/(2*RoC) (Ehrenfest の定理)
+static void test_bend_deflection()
+{
+    const int Nx = 192, Ny = 64;
+    const double lambda = 1.55e-6;
+    const double n0 = 1.444;
+    const double k0 = 2.0 * M_PI / lambda;
+    const double w0 = 8.0e-6;
+    const double dx = 288.0e-6 / Nx;    // x は偏向方向なので広め
+    const double dy = 96.0e-6 / Ny;
+    const double dz = 1.0e-6;
+    const double RoC = 20.0e-3;
+    const int nstep = 400;
+    const double z = nstep * dz;
+
+    wabpm_params W = make_params(Nx, Ny, dx, dy, dz, k0, n0, 0, 0);
+    std::vector<cplx> E((size_t)Nx * Ny);
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double x = coord(ix, Nx, dx);
+            const double y = coord(iy, Ny, dy);
+            E[ix + (long)iy * Nx] = std::exp(-(x * x + y * y) / (w0 * w0));
+        }
+    }
+    // 等価屈折率 (solve_bpm の曲げ変換と同じ, rho_e = 0)
+    std::vector<cplx> n2((size_t)Nx * Ny);
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double x = coord(ix, Nx, dx);
+            const double n = n0 * std::exp(x / RoC);
+            n2[ix + (long)iy * Nx] = cplx(n * n, 0.0);
+        }
+    }
+
+    for (int s = 0; s < nstep; s++) wabpm_step(&W, E.data(), n2.data());
+
+    // x 重心
+    double sumI = 0, sumX = 0;
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double I = std::norm(E[ix + (long)iy * Nx]);
+            sumI += I;
+            sumX += coord(ix, Nx, dx) * I;
+        }
+    }
+    const double xc_num = sumX / sumI;
+    const double xc_ana = z * z / (2.0 * RoC);
+    check_close("bend_deflection", xc_num, xc_ana, 0.02);
+}
+
 // 半ベクトル差分 (Stern) は一様媒質では標準ラプラシアンに帰着する
 static void test_semivectorial_uniform()
 {
@@ -228,6 +279,7 @@ int main()
     test_diffraction(1);
     test_energy_conservation();
     test_absorption();
+    test_bend_deflection();
     test_semivectorial_uniform();
 
     std::printf("\n%d failure(s).\n", g_failures);

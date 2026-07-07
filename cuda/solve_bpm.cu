@@ -274,13 +274,9 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	if (BPM.pol || BPM.wideangle) {
 		// ============================================================
 		// 拡張パス : 広角 BPM (Pade(1,1)) / 半ベクトル BPM (倍精度, bpm/wabpm.cu)
-		// 屈折率項を演算子の内部に含めるため、一般化 ADI で伝搬する。曲げは未対応。
+		// 屈折率項を演算子の内部に含めるため、一般化 ADI で伝搬する。
+		// 曲げは等価屈折率法で n2 スライスへ反映する (近軸パスと同じ変換)。
 		// ============================================================
-		if (BPM.RoC > 0) {
-			sprintf(str, "*** warning : bend is ignored in wideangle/polarization mode.");
-			if (io) fprintf(fp, "%s\n", str);
-			fprintf(stdout, "%s\n", str);
-		}
 		sprintf(str, "mode : %s, polarization = %s (CUDA)",
 				(BPM.wideangle ? "wide-angle Pade(1,1)" : "paraxial"),
 				(BPM.pol == 1 ? "x (semivectorial)" : (BPM.pol == 2 ? "y (semivectorial)" : "scalar")));
@@ -301,6 +297,12 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		wabpm_cplx *Ed = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
 		wabpm_cplx *n2 = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
 
+		// 曲げ (等価屈折率法) : n_bend = n*(1 - n^2*xb*rho_e/(2*RoC))*exp(xb/RoC)
+		// (xb = x*cos(dir) + y*sin(dir), 吸収 = 虚部は変換しない)
+		const int  bend = (BPM.RoC > 0);
+		const double cosB = bend ? cos(BPM.bendDir * DTOR) : 1.0;
+		const double sinB = bend ? sin(BPM.bendDir * DTOR) : 0.0;
+
 		// 初期電界 (チルト位相込みの E1) を倍精度へ
 		for (long i = 0; i < (long)Nx * Ny; i++) {
 			Ed[i] = wabpm_cplx(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
@@ -319,7 +321,15 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				for (int ix = 0; ix < Nx; ix++) {
 					long index = (long)(Nx * iy) + ix;
 					const floatcomplex nm = n_mat[iEx[NA(ix, iy, iz)]];
-					wabpm_cplx n(CREALF(nm), -CIMAGF(nm));
+					double nr = CREALF(nm);
+					if (bend) {
+						const double x = P->dx * (ix - (Nx - 1) / 2.0);
+						const double y = P->dy * (iy - (Ny - 1) / 2.0);
+						const double xb = x * cosB + y * sinB;
+						nr = nr * (1.0 - nr * nr * xb * BPM.rho_e / (2.0 * BPM.RoC))
+						        * exp(xb / BPM.RoC);
+					}
+					wabpm_cplx n(nr, -CIMAGF(nm));
 					n2[index] = n * n;
 				}
 			}

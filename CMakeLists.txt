@@ -452,21 +452,31 @@ if (WITH_POST)
 endif()
 
 # ---------------------------------------------------------------
-# テスト (BPM 伝搬カーネル wabpm_step の解析解検証)
+# テスト (解析解との比較検証)
 #   cmake -S . -B build -DWITH_TESTS=ON
 #   cmake --build build && ctest --test-dir build --output-on-failure
+#   - test_wabpm  : BPM 伝搬カーネル (回折/エネルギー保存/吸収/曲げ/半ベクトル)
+#   - test_modes  : モードソルバ (LP01/LP11 の実効屈折率・直交性)
+#   - test_allset : P_Struct API (findModes/modeSuperposition/offset/tilt)
 # ---------------------------------------------------------------
 option(WITH_TESTS "Build unit tests" OFF)
 if (WITH_TESTS)
     enable_testing()
 
     add_executable(test_wabpm tests/test_wabpm.cpp bpm/wabpm.cpp)
-    target_include_directories(test_wabpm PRIVATE "${PROJECT_SOURCE_DIR}/include")
-    if (OpenMP_CXX_FOUND)
-        target_link_libraries(test_wabpm PRIVATE OpenMP::OpenMP_CXX)
-    endif()
+    add_executable(test_modes tests/test_modes.cpp bpm/modes.cpp bpm/wabpm.cpp)
+    add_executable(test_allset tests/test_allset.cpp bpm/modes.cpp bpm/wabpm.cpp)
+    target_link_libraries(test_allset PRIVATE Eigen3::Eigen)
+    foreach(t test_wabpm test_modes test_allset)
+        target_include_directories(${t} PRIVATE "${PROJECT_SOURCE_DIR}/include")
+        if (OpenMP_CXX_FOUND)
+            target_link_libraries(${t} PRIVATE OpenMP::OpenMP_CXX)
+        endif()
+    endforeach()
 
     add_test(NAME wabpm_unit COMMAND test_wabpm)
+    add_test(NAME modes_unit COMMAND test_modes)
+    add_test(NAME allset_unit COMMAND test_allset)
 endif()
 
 #custom viewer
