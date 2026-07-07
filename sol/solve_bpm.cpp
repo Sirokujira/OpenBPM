@@ -575,21 +575,21 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         double *data;
         size_t size;
     } arrays[] = {
-        {"Xn", Xn, Nx + 1},
-        {"Yn", Yn, Ny + 1},
-        {"Zn", Zn, Nz + 1},
-        {"Xc", Xc, Nx},
-        {"Yc", Yc, Ny},
-        {"Zc", Zc, Nz},
-        {"Eiter", Eiter, Niter},
-        {"Hiter", Hiter, Niter},
-        {"VFeed", VFeed, NFeed * (Solver.maxiter + 1)},
-        {"IFeed", IFeed, NFeed * (Solver.maxiter + 1)},
-        {"VPoint", VPoint, NPoint * (Solver.maxiter + 1)},
-        {"Freq1", Freq1, NFreq1},
-        {"Freq2", Freq2, NFreq2},
+        {"Xn", Xn, (size_t)(Nx + 1)},
+        {"Yn", Yn, (size_t)(Ny + 1)},
+        {"Zn", Zn, (size_t)(Nz + 1)},
+        {"Xc", Xc, (size_t)Nx},
+        {"Yc", Yc, (size_t)Ny},
+        {"Zc", Zc, (size_t)Nz},
+        {"Eiter", Eiter, (size_t)Niter},
+        {"Hiter", Hiter, (size_t)Niter},
+        {"VFeed", VFeed, (size_t)(NFeed * (Solver.maxiter + 1))},
+        {"IFeed", IFeed, (size_t)(NFeed * (Solver.maxiter + 1))},
+        {"VPoint", VPoint, (size_t)(NPoint * (Solver.maxiter + 1))},
+        {"Freq1", Freq1, (size_t)NFreq1},
+        {"Freq2", Freq2, (size_t)NFreq2},
         //{"Gline", Gline, NGline * 2 * 3}
-        {"Gline", reinterpret_cast<double*>(Gline), NGline * 2 * 3}
+        {"Gline", reinterpret_cast<double*>(Gline), (size_t)(NGline * 2 * 3)}
     };
 
     for (size_t i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
