@@ -118,7 +118,10 @@ if (WITH_CUDA)
         #CC : nvcc
         message(STATUS "CUDA が見つかりました。CUDA サポートを有効にします。")
         #message(STATUS ${OBJECT_FILES})
-        #TODO: Makefile の記述を元に必要なオブジェクトファイルのみに絞る?
+        # CUDA ターゲットは以下の明示リスト (SOURCES2) で必要なソースに絞ってある。
+        # CPU 版 (obpm) の file(GLOB SOURCES "sol/*.c") は全ソースをリンクする現状の
+        # 構成で動作しており、これ以上の絞り込みはビルド時間の削減にしかならないため
+        # 意図的に glob のまま維持している。
 
         # オブジェクトファイルを生成するカスタムコマンド
         #add_custom_command(

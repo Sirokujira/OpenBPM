@@ -79,8 +79,10 @@ void BPMModel::setDisplayScaling() {
 }
 
 void BPMModel::finalizeVideo() {
-    // Placeholder for closing video handle
-    std::cout << "Finalizing video..." << std::endl;
+    // 動画出力はソルバ側では行わない方針 :
+    // ソルバは伝搬マップ /field/Ixz と (frames = <interval> 指定時の)
+    // スナップショット /field/frames を time_series_data.h5 に出力し、
+    // 動画化は後処理 (tools/plot_ixz.py が PNG / GIF を生成) に集約する。
 }
 
 //int main() {

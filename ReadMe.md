@@ -22,6 +22,20 @@ cmake --build build -j
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI)
 
+## 可視化
+
+出力 HDF5 を PNG / GIF に変換する後処理スクリプトを用意しています
+(要 h5py, numpy, matplotlib):
+
+```sh
+python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
+```
+
+- `*_ixz.png` : 伝搬マップ `/field/Ixz` のヒートマップ
+- `*_final.png` : 最終電界 `|E(x,y)|^2` と屈折率分布
+- `*_prop.gif` : `|E(x,y)|^2` の伝搬アニメーション (入力に `frames = <interval>` を
+  指定して `/field/frames` を記録した場合のみ)
+
 ## モード解析
 
 虚軸伝搬法 (imaginary-distance BPM) + Gram-Schmidt 直交化によるモードソルバを
@@ -89,6 +103,7 @@ ctest --test-dir build --output-on-failure
 | `polarization` | `polarization = <scalar\|x\|y>` | 半ベクトル BPM の偏波方向。x/y 指定時は偏波方向の界面で D 法線成分連続 (Stern 差分) を反映。省略時はスカラー |
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
+| `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
 
 - `polarization` / `wideangle` 指定時は倍精度の一般化伝搬エンジンを使用します
   (CPU 版 `bpm/wabpm.cpp` / CUDA 版 `bpm/wabpm.cu`、同一アルゴリズム)。

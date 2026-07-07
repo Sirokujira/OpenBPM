@@ -42,13 +42,18 @@ OpenBPM のコードベース調査により判明した「実装漏れ・未実
 
 ## 中優先度
 
-- [ ] **動画出力 `finalizeVideo()` がプレースホルダ**
-  - 場所: `bpm/model.cpp:81`
-  - 現状: `"Finalizing video..."` を出力するだけで、動画ハンドルのクローズ・書き出し処理が無い。
-    `BPMModel` 群は `obpm` のビルド対象に含まれておらず未リンク。
-  - 方針 (暫定): 伝搬の可視化は既に `time_series_data.h5` の `/field/Ixz` (伝搬マップ) で
-    出力されており、動画化は後処理側 (`obpm_post` / 外部スクリプト) に集約するのが自然。
-    `BPMModel` の動画機能を復活させる必要が生じた時点で実装する。
+- [x] **動画出力 `finalizeVideo()` がプレースホルダ** ✅ 対応済み (後処理集約方針で実装)
+  - 場所: `bpm/model.cpp` / `sol/solve_bpm.cpp` / `cuda/solve_bpm.cu` / `tools/plot_ixz.py`
+  - 対応内容: 動画出力はソルバ側では行わず後処理に集約する方針を採用し、実データで実装した。
+    - ソルバ側: 入力キーワード `frames = <interval>` を追加し、`|E(x,y)|²` スナップショットを
+      `/field/frames` (nframes × Ny × Nx) に記録 (CPU 近軸/拡張・CUDA 近軸/拡張の全 4 パス)。
+      メタデータ `/metadata/frame_interval`, `grid_dx/dy/dz` も追加
+    - 後処理側: `tools/plot_ixz.py` が伝搬マップ PNG (`/field/Ixz`)・最終電界/屈折率 PNG・
+      伝搬アニメーション GIF (`/field/frames`) を生成
+    - `finalizeVideo()` の誤解を招く出力 (`"Finalizing video..."`) は削除し、方針を記述した
+      no-op に変更
+  - 検証: `fiber_offset.ofd` + `frames = 20` で 10 フレーム (90×90) の記録・
+    メタデータ・パワー保存を確認し、PNG / GIF の生成まで動作確認済み
 
 - [x] **CUDA DFT (近傍界 3D) の CPU フォールバック経路が TODO** ✅ 確認済み (コード変更不要)
   - 場所: `cuda/dftNear3d.cu`
@@ -58,16 +63,19 @@ OpenBPM のコードベース調査により判明した「実装漏れ・未実
 
 ## 低優先度（検証・整備）
 
-- [ ] **CUDA 版の GPU 実機実行検証が未実施**
+- [ ] **CUDA 版の GPU 実機実行検証が未実施** (ビルド検証は完了)
   - 場所: ReadMe.md（「GPU 実機での実行検証は未実施」）
-  - 現状: ビルドは CUDA 12.0 で確認済みだが、`obpm_cuda` の実機実行結果が CPU 版と一致するか未検証。
-    本対応で追加した曲げ × 広角/半ベクトル (CUDA 側 `cuda/solve_bpm.cu`) も同様に実機検証待ち。
+  - 現状: 本対応で追加した曲げ × 広角/半ベクトル・frames 記録を含む `obpm_cuda` の
+    **CUDA 12.0 でのフルビルドは検証済み**。実機 (GPU) での実行と CPU 版との数値一致
+    確認のみ GPU 環境待ち。
   - 対応案: GPU 環境で `data/*.ofd` サンプルを実行し、CPU 版 `obpm` の出力と数値一致を確認。
 
-- [ ] **CMake のオブジェクトファイル絞り込み TODO**
-  - 場所: `CMakeLists.txt`（`#TODO: Makefile の記述を元に必要なオブジェクトファイルのみに絞る?`）
-  - 現状: 不要オブジェクトを含めてビルドしている可能性。
-  - 対応案: 各ターゲット（`obpm` / `obpm_cuda` / `obpm_post`）に必要なソースのみへ整理。
+- [x] **CMake のオブジェクトファイル絞り込み TODO** ✅ 精査済み (現状維持と判断)
+  - 場所: `CMakeLists.txt`
+  - 調査結果: CUDA ターゲットは既に明示リスト (`SOURCES2`) で必要ソースに絞られており、
+    TODO は古い記述だった。CPU 版 `obpm` の `file(GLOB SOURCES "sol/*.c")` は全ソースが
+    現状リンクされて動作しており、絞り込みはビルド時間の削減にしかならず退行リスクが
+    上回るため意図的に維持する。コメントを実状を表す記述に更新した。
 
 ---
 
