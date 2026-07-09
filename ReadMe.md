@@ -4,6 +4,25 @@ OpenFDTD のコード構造（入力データ・メッシュ・材料・後処�
 ビーム伝搬法 (BPM) ソルバーです。伝搬カーネルは BPM-MATLAB の
 FDBPM (Douglas-Gunn ADI 法) を移植しています。
 
+## 処理部の構成
+
+| ディレクトリ | 役割 |
+|---|---|
+| `src/sol_Main.cpp` | ソルバー `obpm` のエントリ。入力読込 → `solve_bpm()` → `outputChars()`/`writeout()` |
+| `sol/solve_bpm.cpp` | BPM 処理本体: 複素屈折率分布の構築、ガウシアンビーム励振、Douglas-Gunn ADI 伝搬、端部吸収体、HDF5 出力 (`/field`, `/metadata`) |
+| `bpm/FDBPMpropagator.c(u)` | 近軸スカラー BPM の伝搬カーネル (BPM-MATLAB 移植、CPU/CUDA) |
+| `bpm/wabpm.cpp` / `bpm/wabpm.cu` | 広角 (Pade(1,1)) / 半ベクトル BPM の一般化 ADI エンジン (倍精度、CPU/CUDA) |
+| `sol/` (その他) | OpenFDTD 由来の入力パーサ (`input_data.c`)・メッシュ・材料・出力群 |
+| `post/` | ポストプロセッサ `obpm_post` (ev2/ev3、収束・波形プロット)。※下記の既知事項参照 |
+| `include/bpm/` | BPM 共有ヘッダ (`bpm_prototype.h` のプラットフォーム別 complex マクロ等) |
+
+> ⚠ **既知事項**: `obpm_post` は OpenFDTD 由来のポスト処理
+> (obpm.out ベースの FDTD 量の描画) のままで、BPM が
+> `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`) や
+> 最終電界 (`Efinal_*`) の可視化には未対応です。当面は HDF5 を
+> Python (h5py) などで直接読んでください。GUI (OpenFDTD-X) の
+> H5 ビューアからも参照できます。
+
 ## ビルド
 
 必要パッケージ: CMake (>=3.18), C/C++ コンパイラ, Eigen3, HDF5, OpenMP
@@ -111,6 +130,21 @@ ctest --test-dir build --output-on-failure
 
 - `feed` の電圧はビーム振幅として使用されます。
 - メッシュは等間隔を推奨します (不均一の場合は平均セル幅で計算し警告を表示)。
+
+## CI / Release
+
+- push / PR ごとに Linux (gcc) と macOS (AppleClang + Homebrew libomp/Eigen)
+  で CPU ビルド + `data/sample/fiber.ofd` のスモーク実行 (`normal end` 判定)
+- ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64`) に保存
+- `v*` タグを push すると GitHub Release にバイナリが自動添付されます
+
+## 姉妹リポジトリ
+
+| リポジトリ | 手法 |
+|---|---|
+| [OpenFDTD](https://github.com/Sirokujira/OpenFDTD) | 電磁 FDTD |
+| [OpenRCWA](https://github.com/Sirokujira/OpenRCWA) | 周期構造 RCWA |
+| [OpenFDTD-X](https://github.com/Sirokujira/OpenFDTD-X) | Qt6 GUI フロントエンド |
 
 # Reference
 OpenFDTD
