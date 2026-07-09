@@ -58,7 +58,8 @@ static inline void stencil(int pol_dir, const cplx *n2, long i, long stride, lon
 	}
 }
 
-void wabpm_step(const wabpm_params *W, cplx *E, const cplx *n2)
+// ADI 1 ステップ (共通カーネル) : (1 + dp*P) E' = (1 + dm*P) E を解く
+static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cplx dm)
 {
 	const long Nx = W->Nx;
 	const long Ny = W->Ny;
@@ -66,20 +67,9 @@ void wabpm_step(const wabpm_params *W, cplx *E, const cplx *n2)
 	const double idx2 = 1.0 / (W->dx * W->dx);
 	const double idy2 = 1.0 / (W->dy * W->dy);
 	const double k0 = W->k0;
-	const double n0 = W->n0;
-	const double n02 = n0 * n0;
+	const double n02 = W->n0 * W->n0;
 	const int polx = (W->pol == 1);
 	const int poly = (W->pol == 2);
-
-	cplx dp, dm;
-	if (W->wideangle) {
-		dp = cplx(1.0,  k0 * n0 * W->dz) / (4 * k0 * k0 * n02);
-		dm = cplx(1.0, -k0 * n0 * W->dz) / (4 * k0 * k0 * n02);
-	}
-	else {
-		dp = cplx(0.0,  W->dz / (4 * k0 * n0));
-		dm = cplx(0.0, -W->dz / (4 * k0 * n0));
-	}
 
 	cplx *T = new cplx[N];
 
@@ -179,4 +169,62 @@ void wabpm_step(const wabpm_params *W, cplx *E, const cplx *n2)
 	}
 
 	delete[] T;
+}
+
+void wabpm_step(const wabpm_params *W, cplx *E, const cplx *n2)
+{
+	const double k0 = W->k0;
+	const double n0 = W->n0;
+
+	cplx dp, dm;
+	if (W->wideangle) {
+		dp = cplx(1.0,  k0 * n0 * W->dz) / (4 * k0 * k0 * n0 * n0);
+		dm = cplx(1.0, -k0 * n0 * W->dz) / (4 * k0 * k0 * n0 * n0);
+	}
+	else {
+		dp = cplx(0.0,  W->dz / (4 * k0 * n0));
+		dm = cplx(0.0, -W->dz / (4 * k0 * n0));
+	}
+
+	adi_step(W, E, n2, dp, dm);
+}
+
+void wabpm_imagdist_step(const wabpm_params *W, cplx *E, const cplx *n2)
+{
+	// 虚軸伝搬 (z -> -i z) : d± が実数になり、伝搬演算子
+	// (1 - a P)^-1 (1 + a P) は P の固有値 (実効屈折率) が大きい
+	// モードほど大きな利得を持つ -> べき乗法で基本モードへ収束する
+	const double a = W->dz / (4 * W->k0 * W->n0);
+	adi_step(W, E, n2, cplx(-a, 0.0), cplx(a, 0.0));
+}
+
+void wabpm_apply_P(const wabpm_params *W, const cplx *E, const cplx *n2, cplx *out)
+{
+	const long Nx = W->Nx;
+	const long Ny = W->Ny;
+	const double idx2 = 1.0 / (W->dx * W->dx);
+	const double idy2 = 1.0 / (W->dy * W->dy);
+	const double k0 = W->k0;
+	const double n02 = W->n0 * W->n0;
+	const int polx = (W->pol == 1);
+	const int poly = (W->pol == 2);
+
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+	for (long iy = 0; iy < Ny; iy++) {
+		for (long ix = 0; ix < Nx; ix++) {
+			const long i = ix + iy * Nx;
+			double a, b, c;
+			stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
+			cplx lapx = b * E[i];
+			if (ix > 0)      lapx += a * E[i - 1];
+			if (ix < Nx - 1) lapx += c * E[i + 1];
+			stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
+			cplx lapy = b * E[i];
+			if (iy > 0)      lapy += a * E[i - Nx];
+			if (iy < Ny - 1) lapy += c * E[i + Nx];
+			out[i] = lapx * idx2 + lapy * idy2 + k0 * k0 * (n2[i] - n02) * E[i];
+		}
+	}
 }

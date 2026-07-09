@@ -223,6 +223,7 @@ EXTERN struct {
 	int    pol;               // polarization: 0 = scalar, 1 = x (semivectorial), 2 = y
 	int    wideangle;         // 0 = paraxial, 1 = wide-angle Pade(1,1)
 	double tiltx, tilty;      // beam tilt angle [deg]
+	int    frames;            // |E(x,y)|^2 snapshot interval [z-steps] (0 = off)
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {

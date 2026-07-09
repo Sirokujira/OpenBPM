@@ -268,19 +268,27 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
 	floatcomplex *Erow = (floatcomplex *)malloc(P->Nx * sizeof(floatcomplex));
 
+	// |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
+	const int  frameInterval = BPM.frames;
+	const long nframes = (frameInterval > 0)
+	    ? ((P->iz_end - P->iz_start - 1) / frameInterval + 1) : 0;
+	float *Frames = (nframes > 0)
+	    ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
+	if (nframes > 0) {
+		sprintf(str, "frames : interval = %d steps, count = %ld", frameInterval, nframes);
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
+
 	// HDF5ファイルの作成
 	file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
 	if (BPM.pol || BPM.wideangle) {
 		// ============================================================
 		// 拡張パス : 広角 BPM (Pade(1,1)) / 半ベクトル BPM (倍精度, bpm/wabpm.cu)
-		// 屈折率項を演算子の内部に含めるため、一般化 ADI で伝搬する。曲げは未対応。
+		// 屈折率項を演算子の内部に含めるため、一般化 ADI で伝搬する。
+		// 曲げは等価屈折率法で n2 スライスへ反映する (近軸パスと同じ変換)。
 		// ============================================================
-		if (BPM.RoC > 0) {
-			sprintf(str, "*** warning : bend is ignored in wideangle/polarization mode.");
-			if (io) fprintf(fp, "%s\n", str);
-			fprintf(stdout, "%s\n", str);
-		}
 		sprintf(str, "mode : %s, polarization = %s (CUDA)",
 				(BPM.wideangle ? "wide-angle Pade(1,1)" : "paraxial"),
 				(BPM.pol == 1 ? "x (semivectorial)" : (BPM.pol == 2 ? "y (semivectorial)" : "scalar")));
@@ -301,6 +309,12 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		wabpm_cplx *Ed = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
 		wabpm_cplx *n2 = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
 
+		// 曲げ (等価屈折率法) : n_bend = n*(1 - n^2*xb*rho_e/(2*RoC))*exp(xb/RoC)
+		// (xb = x*cos(dir) + y*sin(dir), 吸収 = 虚部は変換しない)
+		const int  bend = (BPM.RoC > 0);
+		const double cosB = bend ? cos(BPM.bendDir * DTOR) : 1.0;
+		const double sinB = bend ? sin(BPM.bendDir * DTOR) : 0.0;
+
 		// 初期電界 (チルト位相込みの E1) を倍精度へ
 		for (long i = 0; i < (long)Nx * Ny; i++) {
 			Ed[i] = wabpm_cplx(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
@@ -319,7 +333,15 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				for (int ix = 0; ix < Nx; ix++) {
 					long index = (long)(Nx * iy) + ix;
 					const floatcomplex nm = n_mat[iEx[NA(ix, iy, iz)]];
-					wabpm_cplx n(CREALF(nm), -CIMAGF(nm));
+					double nr = CREALF(nm);
+					if (bend) {
+						const double x = P->dx * (ix - (Nx - 1) / 2.0);
+						const double y = P->dy * (iy - (Ny - 1) / 2.0);
+						const double xb = x * cosB + y * sinB;
+						nr = nr * (1.0 - nr * nr * xb * BPM.rho_e / (2.0 * BPM.RoC))
+						        * exp(xb / BPM.RoC);
+					}
+					wabpm_cplx n(nr, -CIMAGF(nm));
 					n2[index] = n * n;
 				}
 			}
@@ -331,6 +353,15 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			wabpm_gpu_get_row(G, P->Ny / 2, Ed);  // Ed の先頭 Nx 要素を一時利用
 			for (long ix = 0; ix < Nx; ix++) {
 				Ixz[(iz - P->iz_start) * Nx + ix] = (float)thrust::norm(Ed[ix]);
+			}
+
+			// スナップショットを記録 (全電界をホストへ取得)
+			if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
+				wabpm_gpu_get_field(G, Ed);
+				float *f = &Frames[(size_t)((iz - P->iz_start) / frameInterval) * Nx * Ny];
+				for (long i = 0; i < (long)Nx * Ny; i++) {
+					f[i] = (float)thrust::norm(Ed[i]);
+				}
 			}
 
 			*tdft += cputime() - t0;
@@ -394,6 +425,17 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				Ixz[(iz - P->iz_start) * P->Nx + ix] =
 					(CREALF(Erow[ix]) * CREALF(Erow[ix])) + (CIMAGF(Erow[ix]) * CIMAGF(Erow[ix]));
 			}
+
+			// スナップショットを記録 (デバイス側 E2 の全体をコピー)
+			if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
+				floatcomplex *Efull = (floatcomplex *)malloc((size_t)P->Nx * P->Ny * sizeof(floatcomplex));
+				CUDA_CHECK(cudaMemcpy(Efull, P_now.E2, (size_t)P->Nx * P->Ny * sizeof(floatcomplex), cudaMemcpyDeviceToHost));
+				float *f = &Frames[(size_t)((iz - P->iz_start) / frameInterval) * P->Nx * P->Ny];
+				for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+					f[i] = (CREALF(Efull[i]) * CREALF(Efull[i])) + (CIMAGF(Efull[i]) * CIMAGF(Efull[i]));
+				}
+				free(Efull);
+			}
 		}
 
 		if (iz + 1 < P->iz_end) swapEPointers<<<1, 1>>>(P_dev, iz);
@@ -455,6 +497,16 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			dataspace_id = H5Screate_simple(2, ixz_dims, NULL);
 			dataset_id = H5Dcreate(field_group_id, "Ixz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Ixz);
+			H5Dclose(dataset_id);
+			H5Sclose(dataspace_id);
+		}
+
+		// スナップショット |E(x,y)|^2 (nframes x Ny x Nx) の書き込み
+		if (Frames) {
+			hsize_t fr_dims[3] = {(hsize_t)nframes, (hsize_t)P->Ny, (hsize_t)P->Nx};
+			dataspace_id = H5Screate_simple(3, fr_dims, NULL);
+			dataset_id = H5Dcreate(field_group_id, "frames", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Frames);
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
 		}
@@ -525,6 +577,7 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	// BPM パラメータの書き込み
 	{
 		const double n_0_d = P->n_0;
+		const double frame_interval_d = frameInterval;
 		struct {
 			const char *name;
 			const double *value;
@@ -533,7 +586,11 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			{"n_0",     &n_0_d},
 			{"beam_w0", &w0},
 			{"beam_x0", &xc0},
-			{"beam_y0", &yc0}
+			{"beam_y0", &yc0},
+			{"frame_interval", &frame_interval_d},
+			{"grid_dx", &Dx},
+			{"grid_dy", &Dy},
+			{"grid_dz", &Dz}
 		};
 		for (size_t i = 0; i < sizeof(bpm_metadata) / sizeof(bpm_metadata[0]); i++) {
 			dataspace_id = H5Screate(H5S_SCALAR);
@@ -629,4 +686,5 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	free(n_mat);
 	free(Ixz);
 	free(Erow);
+	if (Frames) free(Frames);
 }

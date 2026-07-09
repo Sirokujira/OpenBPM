@@ -27,6 +27,24 @@ struct wabpm_params {
 // n2 は複素比誘電率 (= 複素屈折率の2乗, 損失は負の虚部)
 void wabpm_step(const wabpm_params *W, std::complex<double> *E, const std::complex<double> *n2);
 
+// 虚軸伝搬 1 ステップ (モード解析用)
+// (1 - a P) E' = (1 + a P) E, a = dz/(4 k0 n0) を解く。P の固有値が
+// 大きい (実効屈折率が高い) モードほど利得が大きく、反復でモードが析出する。
+void wabpm_imagdist_step(const wabpm_params *W, std::complex<double> *E, const std::complex<double> *n2);
+
+// ヘルムホルツ演算子 P = Lx + Ly + k0^2(n^2 - n0^2) の適用 (Rayleigh 商用)
+void wabpm_apply_P(const wabpm_params *W, const std::complex<double> *E,
+                   const std::complex<double> *n2, std::complex<double> *out);
+
+// モード解析 (虚軸伝搬 + Gram-Schmidt 直交化のべき乗法, bpm/modes.cpp)
+//   nModes 個の導波モードを実効屈折率の降順で求める。
+//   modes : nModes * (Nx*Ny) [出力, L2 正規化済み]
+//   neff  : nModes           [出力, Rayleigh 商から算出]
+//   W->dz は虚軸ステップ幅 (収束パラメータ)。戻り値は収束したモード数。
+int wabpm_find_modes(const wabpm_params *W, const std::complex<double> *n2,
+                     int nModes, int maxIter, double tol,
+                     std::complex<double> *modes, double *neff);
+
 #endif
 
 // ---------------------------------------------------------------

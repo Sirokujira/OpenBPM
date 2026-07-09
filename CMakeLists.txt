@@ -120,7 +120,10 @@ if (WITH_CUDA)
         #CC : nvcc
         message(STATUS "CUDA が見つかりました。CUDA サポートを有効にします。")
         #message(STATUS ${OBJECT_FILES})
-        #TODO: Makefile の記述を元に必要なオブジェクトファイルのみに絞る?
+        # CUDA ターゲットは以下の明示リスト (SOURCES2) で必要なソースに絞ってある。
+        # CPU 版 (obpm) の file(GLOB SOURCES "sol/*.c") は全ソースをリンクする現状の
+        # 構成で動作しており、これ以上の絞り込みはビルド時間の削減にしかならないため
+        # 意図的に glob のまま維持している。
 
         # オブジェクトファイルを生成するカスタムコマンド
         #add_custom_command(
@@ -451,6 +454,34 @@ if (WITH_POST)
     #target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m)
     target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m HDF5::HDF5)
 
+endif()
+
+# ---------------------------------------------------------------
+# テスト (解析解との比較検証)
+#   cmake -S . -B build -DWITH_TESTS=ON
+#   cmake --build build && ctest --test-dir build --output-on-failure
+#   - test_wabpm  : BPM 伝搬カーネル (回折/エネルギー保存/吸収/曲げ/半ベクトル)
+#   - test_modes  : モードソルバ (LP01/LP11 の実効屈折率・直交性)
+#   - test_allset : P_Struct API (findModes/modeSuperposition/offset/tilt)
+# ---------------------------------------------------------------
+option(WITH_TESTS "Build unit tests" OFF)
+if (WITH_TESTS)
+    enable_testing()
+
+    add_executable(test_wabpm tests/test_wabpm.cpp bpm/wabpm.cpp)
+    add_executable(test_modes tests/test_modes.cpp bpm/modes.cpp bpm/wabpm.cpp)
+    add_executable(test_allset tests/test_allset.cpp bpm/modes.cpp bpm/wabpm.cpp)
+    target_link_libraries(test_allset PRIVATE Eigen3::Eigen)
+    foreach(t test_wabpm test_modes test_allset)
+        target_include_directories(${t} PRIVATE "${PROJECT_SOURCE_DIR}/include")
+        if (OpenMP_CXX_FOUND)
+            target_link_libraries(${t} PRIVATE OpenMP::OpenMP_CXX)
+        endif()
+    endforeach()
+
+    add_test(NAME wabpm_unit COMMAND test_wabpm)
+    add_test(NAME modes_unit COMMAND test_modes)
+    add_test(NAME allset_unit COMMAND test_allset)
 endif()
 
 #custom viewer

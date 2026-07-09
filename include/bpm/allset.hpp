@@ -5,6 +5,8 @@
 #include <cmath>
 #include <complex>
 
+#include "bpm/wabpm.h"
+
 using namespace std;
 using namespace Eigen;
 
@@ -27,14 +29,14 @@ struct P_Struct {
         float Ly;
     } n;
     struct E_Struct {
-        MatrixXf field;
+        MatrixXcf field;   // 複素電界 (位相チルト等を保持できるよう複素型)
         float Lx;
         float Ly;
         string xSymmetry;
         string ySymmetry;
     } E;
     struct Mode_Struct {
-        MatrixXf field;
+        MatrixXcf field;
         float Lx;
         float Ly;
         string xSymmetry;
@@ -64,7 +66,7 @@ P_Struct initializeEfromFunction(P_Struct P, Func2D_E hFunc, vector<float> Epara
 
     float powerFraction = 1.0f / (1 + (P.xSymmetry != "none")) / (1 + (P.ySymmetry != "none")); // How large a fraction of the total power we are simulating
 
-    P.E.field = E / sqrt((E.array().abs2().sum()) / powerFraction);
+    P.E.field = (E / sqrt((E.array().abs2().sum()) / powerFraction)).cast<complex<float>>();
 
     P.E.Lx = P.n.Lx;
     P.E.Ly = P.n.Ly;
@@ -90,7 +92,8 @@ P_Struct tiltField(P_Struct P, float direction, float angle) {
     }
 
     float k = P.n_0 * 2 * M_PI / P.lambda * angle / 180 * M_PI; // Refractive index in wedge in between fiber segments assumed to be uniformly P.n_0
-    P.E.field = P.E.field.cwiseProduct((-1i * k * (cos(direction * M_PI / 180) * X.array() + sin(direction * M_PI / 180) * Y.array())).exp());
+    ArrayXXf phi = cos(direction * M_PI / 180) * X.array() + sin(direction * M_PI / 180) * Y.array();
+    P.E.field = (P.E.field.array() * (complex<float>(0.0f, -k) * phi.cast<complex<float>>()).exp()).matrix();
 
     return P;
 }
@@ -110,32 +113,31 @@ P_Struct offsetField(P_Struct P, float direction, float distance) {
         }
     }
 
-    MatrixXf X_offset = X.array() + distance * cos(direction * M_PI / 180);
-    MatrixXf Y_offset = Y.array() + distance * sin(direction * M_PI / 180);
+    // 界を +distance 方向へ平行移動する : 移動先の各格子点で
+    // 元の界を (x - ox, y - oy) の位置からインデックス空間の双一次補間で取得する
+    // (格子外は 0 とみなす)
+    const float ox = distance * cos(direction * M_PI / 180);
+    const float oy = distance * sin(direction * M_PI / 180);
+    const int Nx = (int)P.x.size();
+    const int Ny = (int)P.y.size();
+    const float dxs = (Nx > 1) ? (P.x[1] - P.x[0]) : P.dx;
+    const float dys = (Ny > 1) ? (P.y[1] - P.y[0]) : P.dy;
 
-    // Interpolate the field with offset
-    P.E.field = MatrixXf::Zero(X.rows(), X.cols());
-    for (int i = 0; i < X.rows(); ++i) {
-        for (int j = 0; j < X.cols(); ++j) {
-            float x = X_offset(i, j);
-            float y = Y_offset(i, j);
-
-            // Bilinear interpolation (assuming field values outside the grid are zero)
-            int x1 = floor(x);
-            int x2 = ceil(x);
-            int y1 = floor(y);
-            int y2 = ceil(y);
-
-            if (x1 >= 0 && x2 < X.cols() && y1 >= 0 && y2 < Y.rows()) {
-                float Q11 = P.E.field(y1, x1);
-                float Q12 = P.E.field(y2, x1);
-                float Q21 = P.E.field(y1, x2);
-                float Q22 = P.E.field(y2, x2);
-
-                float R1 = ((x2 - x) / (x2 - x1)) * Q11 + ((x - x1) / (x2 - x1)) * Q21;
-                float R2 = ((x2 - x) / (x2 - x1)) * Q12 + ((x - x1) / (x2 - x1)) * Q22;
-
-                P.E.field(i, j) = ((y2 - y) / (y2 - y1)) * R1 + ((y - y1) / (y2 - y1)) * R2;
+    const MatrixXcf src = P.E.field;
+    P.E.field = MatrixXcf::Zero(Nx, Ny);
+    for (int i = 0; i < Nx; ++i) {
+        for (int j = 0; j < Ny; ++j) {
+            const float fi = (P.x[i] - ox - P.x[0]) / dxs;   // 元格子上の実数インデックス
+            const float fj = (P.y[j] - oy - P.y[0]) / dys;
+            const int i0 = (int)floor(fi);
+            const int j0 = (int)floor(fj);
+            if (i0 >= 0 && i0 + 1 < Nx && j0 >= 0 && j0 + 1 < Ny) {
+                const float tx = fi - i0;
+                const float ty = fj - j0;
+                P.E.field(i, j) = (1 - tx) * (1 - ty) * src(i0,     j0)
+                                + (    tx) * (1 - ty) * src(i0 + 1, j0)
+                                + (1 - tx) * (    ty) * src(i0,     j0 + 1)
+                                + (    tx) * (    ty) * src(i0 + 1, j0 + 1);
             }
         }
     }
@@ -151,34 +153,79 @@ P_Struct modeSuperposition(P_Struct P, vector<int> modeIdxs, vector<float> coeff
     P_Struct::E_Struct result;
     result.Lx = P.modes[modeIdxs[0]].Lx;
     result.Ly = P.modes[modeIdxs[0]].Ly;
-    result.field = MatrixXf::Zero(P.modes[0].field.rows(), P.modes[0].field.cols());
+    result.field = MatrixXcf::Zero(P.modes[0].field.rows(), P.modes[0].field.cols());
     result.xSymmetry = P.modes[modeIdxs[0]].xSymmetry;
     result.ySymmetry = P.modes[modeIdxs[0]].ySymmetry;
 
     for (size_t i = 0; i < modeIdxs.size(); ++i) {
-        result.field += coeffs[i] * P.modes[modeIdxs[i]].field;
+        result.field += complex<float>(coeffs[i], 0.0f) * P.modes[modeIdxs[i]].field;
     }
 
     P.E = result;
     return P;
 }
 
+// 導波モードを実効屈折率の降順で求める (虚軸伝搬法, bpm/modes.cpp)
+// P.n.n は field(ix, iy) 配置 (行 = x, 列 = y) の実屈折率分布。
+// 使用時は bpm/modes.cpp と bpm/wabpm.cpp をリンクすること。
+// singleCoreModes / sortByLoss / plotModes は未サポート (無視される)。
 P_Struct findModes(P_Struct P, int nModes, bool singleCoreModes = false, bool sortByLoss = false, bool plotModes = true) {
-    // Placeholder implementation to find modes
+    (void)singleCoreModes; (void)sortByLoss; (void)plotModes;
     cout << "Finding modes..." << endl;
-    // For now, we'll simulate finding some modes
-    for (int i = 0; i < nModes; ++i) {
+
+    const int Nx = (int)P.n.n.rows();
+    const int Ny = (int)P.n.n.cols();
+    const long N = (long)Nx * Ny;
+
+    wabpm_params W;
+    W.Nx = Nx;
+    W.Ny = Ny;
+    W.dx = P.dx;
+    W.dy = P.dy;
+    W.k0 = 2.0 * M_PI / P.lambda;
+    W.n0 = P.n_0;
+    W.wideangle = 0;
+    W.pol = 0;
+
+    // 屈折率分布 (実数) -> 複素比誘電率
+    vector<complex<double>> n2((size_t)N);
+    double nmax = P.n_0;
+    for (int iy = 0; iy < Ny; ++iy) {
+        for (int ix = 0; ix < Nx; ++ix) {
+            const double n = P.n.n(ix, iy);
+            n2[ix + (long)iy * Nx] = complex<double>(n * n, 0.0);
+            if (n > nmax) nmax = n;
+        }
+    }
+
+    // 虚軸ステップ幅 : 最大固有値 mu_max = k0^2(nmax^2 - n0^2) に対し
+    // a*mu_max ~ 0.5 となるよう選ぶ (a = dz/(4 k0 n0))
+    const double mu_max = W.k0 * W.k0 * (nmax * nmax - W.n0 * W.n0);
+    W.dz = (mu_max > 0) ? (2.0 * W.k0 * W.n0 / mu_max) : (10 * P.dx);
+
+    vector<complex<double>> modes((size_t)nModes * N);
+    vector<double> neff((size_t)nModes);
+    const int nFound = wabpm_find_modes(&W, n2.data(), nModes, 20000, 1e-12,
+                                        modes.data(), neff.data());
+
+    for (int m = 0; m < nFound; ++m) {
         P_Struct::Mode_Struct mode;
         mode.Lx = P.n.Lx;
         mode.Ly = P.n.Ly;
         mode.xSymmetry = P.xSymmetry;
         mode.ySymmetry = P.ySymmetry;
-        mode.field = MatrixXf::Random(P.n.n.rows(), P.n.n.cols());
-        mode.neff = complex<float>(1.5f, 0.01f * i);
-        mode.label = "Mode " + to_string(i + 1);
+        mode.field = MatrixXcf(Nx, Ny);
+        for (int iy = 0; iy < Ny; ++iy) {
+            for (int ix = 0; ix < Nx; ++ix) {
+                const complex<double> v = modes[(size_t)m * N + ix + (long)iy * Nx];
+                mode.field(ix, iy) = complex<float>((float)v.real(), (float)v.imag());
+            }
+        }
+        mode.neff = complex<float>((float)neff[m], 0.0f);
+        mode.label = "Mode " + to_string(m + 1);
         P.modes.push_back(mode);
     }
-    cout << "Found " << nModes << " modes." << endl;
+    cout << "Found " << nFound << " modes." << endl;
     return P;
 }
 

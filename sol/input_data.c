@@ -75,6 +75,7 @@ int input_data(FILE *fp)
 	BPM.pol = 0;      // scalar
 	BPM.wideangle = 0;
 	BPM.tiltx = BPM.tilty = 0;
+	BPM.frames = 0;   // 0 = スナップショット記録なし
 
 	NFreq1 =
 	NFreq2 = 0;
@@ -506,6 +507,11 @@ int input_data(FILE *fp)
 			// beamtilt = <theta_x[deg]> [<theta_y[deg]>] : 入射ビームの傾き
 			BPM.tiltx = atof(token[2]);
 			if (ntoken > 3) BPM.tilty = atof(token[3]);
+		}
+		else if (!strcmp(strkey, "frames")) {
+			// frames = <interval> : |E(x,y)|^2 スナップショットの記録間隔 [z ステップ]
+			// (0 = 記録なし。/field/frames へ出力し、tools/plot_ixz.py で動画化できる)
+			BPM.frames = atoi(token[2]);
 		}
 	}
 /*

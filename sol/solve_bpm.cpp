@@ -235,6 +235,18 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
     float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
 
+    // |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
+    const int  frameInterval = BPM.frames;
+    const long nframes = (frameInterval > 0)
+        ? ((P->iz_end - P->iz_start - 1) / frameInterval + 1) : 0;
+    float *Frames = (nframes > 0)
+        ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
+    if (nframes > 0) {
+        sprintf(str, "frames : interval = %d steps, count = %ld", frameInterval, nframes);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
+
     // HDF5ファイルの作成
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
@@ -242,13 +254,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // ============================================================
         // 拡張パス : 広角 BPM (Pade(1,1)) / 半ベクトル BPM (倍精度)
         // 屈折率項を演算子の内部に含めるため、位相 multiplier ではなく
-        // 一般化 ADI (bpm/wabpm.cpp) で伝搬する。曲げは未対応。
+        // 一般化 ADI (bpm/wabpm.cpp) で伝搬する。曲げは等価屈折率法で
+        // n2 スライスへ反映する (近軸パスと同じ変換、実部のみ)。
         // ============================================================
-        if (BPM.RoC > 0) {
-            sprintf(str, "*** warning : bend is ignored in wideangle/polarization mode.");
-            if (io) fprintf(fp, "%s\n", str);
-            fprintf(stdout, "%s\n", str);
-        }
         sprintf(str, "mode : %s, polarization = %s",
                 (BPM.wideangle ? "wide-angle Pade(1,1)" : "paraxial"),
                 (BPM.pol == 1 ? "x (semivectorial)" : (BPM.pol == 2 ? "y (semivectorial)" : "scalar")));
@@ -269,6 +277,12 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         std::complex<double> *Ed = new std::complex<double>[(size_t)Nx * Ny];
         std::complex<double> *n2 = new std::complex<double>[(size_t)Nx * Ny];
 
+        // 曲げ (等価屈折率法) : n_bend = n*(1 - n^2*xb*rho_e/(2*RoC))*exp(xb/RoC)
+        // (xb = x*cos(dir) + y*sin(dir), 吸収 = 虚部は変換しない)
+        const int  bend = (BPM.RoC > 0);
+        const double cosB = bend ? cos(BPM.bendDir * DTOR) : 1.0;
+        const double sinB = bend ? sin(BPM.bendDir * DTOR) : 0.0;
+
         // 初期電界 (チルト位相込みの E1) を倍精度へ
         for (long i = 0; i < (long)Nx * Ny; i++) {
             Ed[i] = std::complex<double>(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
@@ -286,7 +300,15 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                     long index = (long)(P->Nx * iy) + ix;
                     int64_t nn = NA(ix, iy, iz);
                     const floatcomplex nm = n_mat[iEx[nn]];
-                    std::complex<double> n(CREALF(nm), -CIMAGF(nm));
+                    double nr = CREALF(nm);
+                    if (bend) {
+                        const double x = P->dx * (ix - (P->Nx - 1) / 2.0);
+                        const double y = P->dy * (iy - (P->Ny - 1) / 2.0);
+                        const double xb = x * cosB + y * sinB;
+                        nr = nr * (1.0 - nr * nr * xb * BPM.rho_e / (2.0 * BPM.RoC))
+                                * exp(xb / BPM.RoC);
+                    }
+                    std::complex<double> n(nr, -CIMAGF(nm));
                     n2[index] = n * n;
                 }
             }
@@ -302,6 +324,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 const long row0 = (long)(P->Ny / 2) * P->Nx;
                 for (long ix = 0; ix < P->Nx; ix++) {
                     Ixz[(iz - P->iz_start) * P->Nx + ix] = (float)std::norm(Ed[row0 + ix]);
+                }
+            }
+
+            // スナップショットを記録
+            if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
+                float *f = &Frames[(size_t)((iz - P->iz_start) / frameInterval) * P->Nx * P->Ny];
+                for (long i = 0; i < (long)Nx * Ny; i++) {
+                    f[i] = (float)std::norm(Ed[i]);
                 }
             }
 
@@ -366,6 +396,15 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             }
         }
 
+        // スナップショットを記録
+        if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
+            float *f = &Frames[(size_t)((iz - P->iz_start) / frameInterval) * P->Nx * P->Ny];
+            for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+                const floatcomplex e = P->E2[i];
+                f[i] = (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
+            }
+        }
+
         if(iz+1 < P->iz_end) swapEPointers(P,iz);
         updatePrecisePower(P);
 
@@ -425,6 +464,16 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             dataspace_id = H5Screate_simple(2, ixz_dims, NULL);
             dataset_id = H5Dcreate(field_group_id, "Ixz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
             status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Ixz);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+
+        // スナップショット |E(x,y)|^2 (nframes x Ny x Nx) の書き込み
+        if (Frames) {
+            hsize_t fr_dims[3] = {(hsize_t)nframes, (hsize_t)P->Ny, (hsize_t)P->Nx};
+            dataspace_id = H5Screate_simple(3, fr_dims, NULL);
+            dataset_id = H5Dcreate(field_group_id, "frames", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Frames);
             H5Dclose(dataset_id);
             H5Sclose(dataspace_id);
         }
@@ -543,6 +592,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // BPM パラメータの書き込み
     {
         const double n_0_d = P->n_0;
+        const double frame_interval_d = frameInterval;
         struct {
             const char *name;
             const double *value;
@@ -551,7 +601,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             {"n_0",     &n_0_d},
             {"beam_w0", &w0},
             {"beam_x0", &xc0},
-            {"beam_y0", &yc0}
+            {"beam_y0", &yc0},
+            {"frame_interval", &frame_interval_d},
+            {"grid_dx", &Dx},
+            {"grid_dy", &Dy},
+            {"grid_dz", &Dz}
         };
         for (size_t i = 0; i < sizeof(bpm_metadata) / sizeof(bpm_metadata[0]); i++) {
             dataspace_id = H5Screate(H5S_SCALAR);
@@ -659,6 +713,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     free(P->b);
     free(n_mat);
     free(Ixz);
+    if (Frames) free(Frames);
 
     return;
 }

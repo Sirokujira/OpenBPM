@@ -322,7 +322,7 @@ void dftNear3d(int itime)
 			if (UM) cudaDeviceSynchronize();
 		}
 		else {
-			// CPU TODO
+			// CPU フォールバック (GPU カーネルと同一のループ範囲で全 6 成分を積算)
 			dft_near3dEx_cpu(Ex, d_cEx_r, d_cEx_i, fe_r, fe_i, iMin, iMax, jMin, jMax, kMin, kMax, adr0, &h_Param);
 			dft_near3dEy_cpu(Ey, d_cEy_r, d_cEy_i, fe_r, fe_i, iMin, iMax, jMin, jMax, kMin, kMax, adr0, &h_Param);
 			dft_near3dEz_cpu(Ez, d_cEz_r, d_cEz_i, fe_r, fe_i, iMin, iMax, jMin, jMax, kMin, kMax, adr0, &h_Param);
