@@ -9,7 +9,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 find_package(Threads REQUIRED)
 
-find_package (Eigen3 3.3 REQUIRED)
+find_package(Eigen3 REQUIRED)  # バージョン指定なし: Homebrew の Eigen 5.x も受理する
 
 # CUDA を使用するかどうかを設定するオプションを追加
 option(WITH_CUDA "Enable CUDA support" OFF)

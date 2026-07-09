@@ -36,9 +36,11 @@
     // 虚数単位 (GCC 拡張の虚数定数。キャストでは虚数単位にならないことに注意)
     #undef I
     #define I (__extension__ 1.0fi)
-    #define CEXPF(x) (cexpf(x))
-    #define CREALF(x) (crealf(x))
-    #define CIMAGF(x) (cimagf(x))
+    // macOS の complex.h は C++ では C99 API (crealf 等) を宣言しないため、
+    // gcc/clang 共通のビルトイン・拡張構文で実装する
+    #define CEXPF(x) (__builtin_cexpf(x))
+    #define CREALF(x) (__real__ (x))
+    #define CIMAGF(x) (__imag__ (x))
     //#define I std::complex<float>{0,1}
     //#define CREALF(x) (x.r)
     //#define CIMAGF(x) (x.i)
