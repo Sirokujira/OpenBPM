@@ -60,6 +60,9 @@ void post(void)
 		}
 	}
 
+	// BPM: time_series_data.h5 の /field (伝搬マップ・最終電界) があれば描画
+	plot2dBpm();
+
 	ev2d_file(!HTML, (!HTML ? FN_ev2d_1 : FN_ev2d_0));
 	ev2d_output();
 
