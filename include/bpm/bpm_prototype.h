@@ -46,13 +46,14 @@
     //#define CIMAGF(x) (x.i)
     #define FLOORF(x) (floorf(x))
   #else
+    // MSVC: C99 _Complex が無いため std::complex を使用 (C++ としてコンパイルする)
     #include <algorithm>
     #include <complex>
     typedef std::complex<float> floatcomplex;
     #define I std::complex<float>{0,1}
     #define CEXPF(x) (std::exp(x))
-    #define CREALF(x) (x.r)
-    #define CIMAGF(x) (x.i)
+    #define CREALF(x) ((x).real())
+    #define CIMAGF(x) ((x).imag())
     #define MAX(x,y) (std::max(x,y))
     #define MIN(x,y) (std::min(x,y))
     #define FLOORF(x) (std::floor(x))

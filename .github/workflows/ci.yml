@@ -134,3 +134,76 @@ jobs:
           name: smoke-logs-macos
           path: /tmp/smoke/*.log
           if-no-files-found: ignore
+
+  # Windows (MSVC)。依存は vcpkg (x64-windows-static-md 静的リンク) で導入し、
+  # DLL 同梱不要の自己完結 exe を生成する。ビルドは MSVC 環境 + Ninja。
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write   # タグ push 時の Release 添付に使用
+    steps:
+      - uses: actions/checkout@v4
+
+      # hdf5 の既定機能 szip は libaec を gitlab.dkrz.de から取得するが
+      # 429 で落ちることがあるため、必要な core+zlib のみに絞る
+      - name: Install dependencies (vcpkg)
+        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md --recurse
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure (CPU only)
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DWITH_CUDA=OFF -DWITH_MPI=OFF
+          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+
+      - name: Build obpm / obpm_post
+        run: cmake --build build
+
+      - name: Smoke test — solver (fiber sample)
+        run: |
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Copy-Item data/sample/fiber.ofd smoke/
+          Set-Location smoke
+          & "$env:GITHUB_WORKSPACE\bin\obpm.exe" -n 2 fiber.ofd
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Select-String -Path obpm.log -Pattern "normal end" -Quiet)) { Write-Error "no normal end"; exit 1 }
+          if ((Get-Item obpm.out).Length -eq 0) { Write-Error "empty obpm.out"; exit 1 }
+          & "$env:GITHUB_WORKSPACE\bin\obpm_post.exe" -n 2 fiber.ofd
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Smoke test — BPM propagation map (post output)
+        run: |
+          Set-Location smoke
+          if (-not (Test-Path bpm_ixz.csv)) { Write-Error "bpm_ixz.csv missing"; exit 1 }
+
+      - name: Upload binaries (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: obpm-windows-x64
+          path: |
+            bin/obpm.exe
+            bin/obpm_post.exe
+
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: Compress-Archive -Path bin/obpm.exe, bin/obpm_post.exe -DestinationPath obpm-windows-x64.zip
+
+      - name: Attach binaries to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: obpm-windows-x64.zip
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-windows
+          path: |
+            smoke/*.log
+            smoke-rcwa/*.log
+          if-no-files-found: ignore
