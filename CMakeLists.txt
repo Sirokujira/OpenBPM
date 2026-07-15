@@ -7,6 +7,18 @@ project(openBPM
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
+
+# ── Windows (MSVC) 対応 ──────────────────────────────────────────────
+# libm は存在しない (MATH_LIB を空にする)。ソースは UTF-8 (日本語コメント)。
+# M_PI 等は _USE_MATH_DEFINES が必要。
+if(MSVC)
+    add_compile_options(/utf-8)
+    add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS NOMINMAX)
+    set(MATH_LIB "")
+else()
+    set(MATH_LIB m)
+endif()
+
 find_package(Threads REQUIRED)
 
 find_package(Eigen3 REQUIRED)  # バージョン指定なし: Homebrew の Eigen 5.x も受理する
@@ -410,6 +422,11 @@ else()
         target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
     else ()
         #add_executable(obpm ${SOURCES} sol/solve_bpm.cpp src/sol_Main.c)
+        # MSVC の C コンパイラは C99 _Complex を扱えないため、
+        # floatcomplex (std::complex) を使う C ファイルは C++ としてコンパイルする
+        if(MSVC)
+            set_source_files_properties(bpm/FDBPMpropagator.c PROPERTIES LANGUAGE CXX)
+        endif()
         add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c bpm/wabpm.cpp sol/solve_bpm.cpp src/sol_Main.cpp)
         #target_link_libraries(obpm glfw)
         #target_link_libraries(obpm OpenGL::GL)
@@ -421,11 +438,11 @@ else()
         # Link OpenMP libraries to the target
         if(OpenMP_C_FOUND)
             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m)
-            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m HDF5::HDF5 Eigen3::Eigen)
+            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C ${MATH_LIB} HDF5::HDF5 Eigen3::Eigen)
             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_CXX m)
         else()
             #target_link_libraries(obpm PRIVATE m)
-            target_link_libraries(obpm PRIVATE m HDF5::HDF5)
+            target_link_libraries(obpm PRIVATE ${MATH_LIB} HDF5::HDF5)
         endif()
 
         # ターゲットのオブジェクトディレクトリを設定
@@ -452,7 +469,7 @@ if (WITH_POST)
     target_include_directories(obpm_post PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
     #target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m)
-    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C m HDF5::HDF5)
+    target_link_libraries(obpm_post PRIVATE OpenMP::OpenMP_C ${MATH_LIB} HDF5::HDF5)
 
 endif()
 
