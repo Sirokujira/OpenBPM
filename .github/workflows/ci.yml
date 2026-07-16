@@ -24,10 +24,13 @@ jobs:
           sudo apt-get install -y cmake gcc g++ libhdf5-dev libeigen3-dev
 
       - name: Configure (CPU only)
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(nproc)"
+
+      - name: Unit tests (解析解との比較検証)
+        run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
         run: |
@@ -41,6 +44,19 @@ jobs:
         run: |
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
+
+      # data/ 直下の全サンプルを実行し HDF5 出力と正常終了を確認する
+      # (obpm.out は不要なので -no-fdtd-out でスキップ)
+      - name: Smoke test — all samples
+        run: |
+          mkdir -p /tmp/smoke-all && cd /tmp/smoke-all
+          for f in "$GITHUB_WORKSPACE"/data/*.ofd; do
+            echo "== $(basename "$f") =="
+            "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out "$f" > run.log 2>&1 || { tail -20 run.log; exit 1; }
+            grep -q "normal end" obpm.log
+            test -s time_series_data.h5
+            rm -f obpm.log time_series_data.h5 run.log
+          done
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
@@ -207,3 +223,21 @@ jobs:
             smoke/*.log
             smoke-rcwa/*.log
           if-no-files-found: ignore
+
+  # CUDA 版のコンパイル・リンク検証 (ランナーに GPU は無いため実行はしない)
+  build-cuda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (incl. CUDA toolkit)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc g++ libhdf5-dev libeigen3-dev nvidia-cuda-toolkit
+
+      - name: Configure (CUDA)
+        run: cmake -B build_cuda -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_MPI=OFF
+
+      - name: Build obpm_cuda (compile/link only)
+        run: cmake --build build_cuda --target obpm_cuda -j"$(nproc)"
