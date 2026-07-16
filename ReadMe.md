@@ -16,12 +16,19 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 | `post/` | ポストプロセッサ `obpm_post` (ev2/ev3、収束・波形プロット)。※下記の既知事項参照 |
 | `include/bpm/` | BPM 共有ヘッダ (`bpm_prototype.h` のプラットフォーム別 complex マクロ等) |
 
-> ⚠ **既知事項**: `obpm_post` は OpenFDTD 由来のポスト処理
-> (obpm.out ベースの FDTD 量の描画) のままで、BPM が
-> `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`) や
-> 最終電界 (`Efinal_*`) の可視化には未対応です。当面は HDF5 を
-> Python (h5py) などで直接読んでください。GUI (OpenFDTD-X) の
-> H5 ビューアからも参照できます。
+> ℹ **既知事項**:
+> - `obpm_post` は OpenFDTD 由来の FDTD 量の描画 (obpm.out ベース) に加え、
+>   BPM が `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`)・
+>   最終電界 (`Efinal_*`) の可視化にも対応しています (`post/postbpm.c`)。
+>   HDF5 を Python (h5py) で直接読む・GUI (OpenFDTD-X) の H5 ビューアで
+>   参照することも可能です。
+> - obpm.out (FDTD 形式、BPM ではほぼゼロの大容量バイナリ) が不要な場合は
+>   ソルバーに `-no-fdtd-out` を付けるとスキップできます
+>   (その場合 `obpm_post` の FDTD 量描画は不可、BPM の H5 出力は影響なし)。
+> - BPM ソルバーで無効な入力キーワード (`planewave`/`point`/`load`/`rfeed`/
+>   `abc = 1`/`pbc`) は実行時に warning を表示して無視します。
+>   波長掃引は未対応 (`frequency2` の先頭周波数のみ使用)。
+>   分散性材料 (type 2) は einf 近似です。
 
 ## ビルド
 

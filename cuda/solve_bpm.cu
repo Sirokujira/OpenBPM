@@ -77,6 +77,32 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
 	const double k0 = (2 * PI) / lambda;
 
+	// BPM で無効な入力キーワードの警告 (パースはされるが伝搬には反映されない)
+	{
+	    struct { int cond; const char *name; } ignored[] = {
+	        {IPlanewave != 0,          "planewave"},
+	        {NPoint > 0,               "point (S パラメータ出力はゼロになる)"},
+	        {NInductor > 0,            "load"},
+	        {rFeed != 0,               "rfeed"},
+	        {iABC == 1,                "abc = 1 (PML; BPM は独自の端部吸収体を使用)"},
+	        {PBCx || PBCy || PBCz,     "pbc"},
+	    };
+	    for (size_t n = 0; n < sizeof(ignored) / sizeof(ignored[0]); n++) {
+	        if (ignored[n].cond) {
+	            sprintf(str, "*** warning : keyword '%s' is ignored by the BPM solver.", ignored[n].name);
+	            if (io) fprintf(fp, "%s\n", str);
+	            fprintf(stdout, "%s\n", str);
+	        }
+	    }
+	    // 波長掃引は未対応 (先頭周波数のみ使用)
+	    if ((NFreq2 > 1) || ((NFreq2 == 0) && (NFreq1 > 1))) {
+	        sprintf(str, "*** warning : multiple frequencies are not swept by the BPM solver (only the first is used).");
+	        if (io) fprintf(fp, "%s\n", str);
+	        fprintf(stdout, "%s\n", str);
+	    }
+	}
+
+
 	// 材料毎の複素屈折率テーブル : n = sqrt(epsr - i*sigma/(omega*eps0))
 	// 損失を imag(n) > 0 として格納する (applyMultiplier の exp(d*imag(n)), d < 0 の規約)
 	floatcomplex *n_mat = (floatcomplex *)malloc(NMaterial * sizeof(floatcomplex));

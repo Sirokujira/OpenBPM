@@ -54,6 +54,9 @@ if(WITH_MPI)
     #+cuda
     #find_package(MPI REQUIRED)
     add_compile_definitions(_MPI)
+    # MPI 版 (mpi/solve.c) は並列 HDF5 (H5Pset_fapl_mpio 等) を使うため、
+    # 後段の find_package(HDF5) で並列ビルドの HDF5 を優先させる
+    set(HDF5_PREFER_PARALLEL TRUE)
     message(STATUS "_MPI マクロが定義されました")
 else()
     message(STATUS "_MPI マクロは定義されていません")
@@ -359,7 +362,6 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/initfield.c
             ${CMAKE_SOURCE_DIR}/sol/input_data.c
             ${CMAKE_SOURCE_DIR}/sol/input2.c
-            ${CMAKE_SOURCE_DIR}/sol/Makefile
             ${CMAKE_SOURCE_DIR}/sol/memallocfree1.c
             ${CMAKE_SOURCE_DIR}/sol/memallocfree2.c
             ${CMAKE_SOURCE_DIR}/sol/memallocfree3.c
@@ -389,7 +391,6 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/setupMurHx.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHy.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHz.c
-            ${CMAKE_SOURCE_DIR}/sol/setupNear.c_
             ${CMAKE_SOURCE_DIR}/sol/setupPml.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEx.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEy.c
