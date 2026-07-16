@@ -224,6 +224,7 @@ EXTERN struct {
 	int    wideangle;         // 0 = paraxial, 1 = wide-angle Pade(1,1)
 	double tiltx, tilty;      // beam tilt angle [deg]
 	int    frames;            // |E(x,y)|^2 snapshot interval [z-steps] (0 = off)
+	int    launchMode;        // launch: -1 = gaussian (default), >=0 = guided mode #m
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {

@@ -76,6 +76,7 @@ int input_data(FILE *fp)
 	BPM.wideangle = 0;
 	BPM.tiltx = BPM.tilty = 0;
 	BPM.frames = 0;   // 0 = スナップショット記録なし
+	BPM.launchMode = -1;  // -1 = ガウシアン励振 (既定)
 
 	NFreq1 =
 	NFreq2 = 0;
@@ -512,6 +513,22 @@ int input_data(FILE *fp)
 			// frames = <interval> : |E(x,y)|^2 スナップショットの記録間隔 [z ステップ]
 			// (0 = 記録なし。/field/frames へ出力し、tools/plot_ixz.py で動画化できる)
 			BPM.frames = atoi(token[2]);
+		}
+		else if (!strcmp(strkey, "launch")) {
+			// launch = gauss | mode [<m>] : 励振方法 (既定 gauss)
+			// mode 指定時は先頭スライスの屈折率分布から導波モード #m を
+			// 虚軸伝搬法で求めて励振する (m 省略時は基本モード 0)
+			if      (!strcmp(token[2], "mode")) {
+				BPM.launchMode = (ntoken > 3) ? atoi(token[3]) : 0;
+				if (BPM.launchMode < 0) BPM.launchMode = 0;
+			}
+			else if (!strcmp(token[2], "gauss")) {
+				BPM.launchMode = -1;
+			}
+			else {
+				printf(errfmt2, strkey);
+				return 1;
+			}
 		}
 	}
 /*

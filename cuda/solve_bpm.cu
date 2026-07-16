@@ -246,6 +246,65 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		P->precisePower = power;
 	}
 
+	// モード励振 (launch = mode <m>) : 先頭スライスの屈折率分布から導波モードを
+	// 虚軸伝搬法 (bpm/modes.cpp) で求め、ガウシアンの代わりに励振する。
+	// 振幅は feed 電圧 (モードは L2 正規化済みのため入力電力 = volt^2)。
+	if (BPM.launchMode >= 0) {
+		const long Nm = (long)Nx * Ny;
+		std::complex<double> *n2m = new std::complex<double>[Nm];
+		double nmax = 0;
+		for (int iy = 0; iy < Ny; iy++) {
+		    for (int ix = 0; ix < Nx; ix++) {
+				const floatcomplex nmv = n_mat[iEx[NA(ix, iy, 0)]];
+				std::complex<double> nn(CREALF(nmv), -CIMAGF(nmv));
+				n2m[(long)Nx * iy + ix] = nn * nn;
+				if (nn.real() > nmax) nmax = nn.real();
+		    }
+		}
+		int launched = 0;
+		if (nmax > P->n_0) {
+		    const int m = BPM.launchMode;
+		    wabpm_params Wm;
+		    Wm.Nx = Nx;
+		    Wm.Ny = Ny;
+		    Wm.dx = Dx;
+		    Wm.dy = Dy;
+		    Wm.k0 = k0;
+		    Wm.n0 = P->n_0;
+		    Wm.wideangle = 0;
+		    Wm.pol = BPM.pol;
+		    // a*mu_max ~ 0.5 となる虚軸ステップ幅 (tests/test_modes.cpp と同じ)
+		    const double mu_max = k0 * k0 * ((nmax * nmax) - ((double)P->n_0 * P->n_0));
+		    Wm.dz = 2 * k0 * P->n_0 / mu_max;
+		    std::complex<double> *modes = new std::complex<double>[(size_t)(m + 1) * Nm];
+		    double *neff = new double[m + 1];
+		    const int nFound = wabpm_find_modes(&Wm, n2m, m + 1, 20000, 1e-10, modes, neff);
+		    if (nFound >= m + 1) {
+				const double volt = (NFeed > 0) ? Feed[0].volt : 1;
+				double power = 0;
+				for (long i = 0; i < Nm; i++) {
+				    const std::complex<double> em = volt * modes[(size_t)m * Nm + i];
+				    floatcomplex e = {(float)em.real(), (float)em.imag()};
+				    P->E1[i] = e;
+				    power += std::norm(em);
+				}
+				P->precisePower = power;
+				sprintf(str, "launch : mode %d, neff = %.6f (found %d)", m, neff[m], nFound);
+				if (io) fprintf(fp, "%s\n", str);
+				fprintf(stdout, "%s\n", str);
+				launched = 1;
+		    }
+		    delete[] modes;
+		    delete[] neff;
+		}
+		if (!launched) {
+		    sprintf(str, "*** warning : launch = mode %d: mode not found (no guided structure or not converged). Falling back to Gaussian.", BPM.launchMode);
+		    if (io) fprintf(fp, "%s\n", str);
+		    fprintf(stdout, "%s\n", str);
+		}
+		delete[] n2m;
+	}
+
 	P->EfieldPower = 0;
 	P->precisePowerDiff = 0;
 

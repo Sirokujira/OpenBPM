@@ -297,7 +297,7 @@ if (WITH_CUDA)
 
             #add_executable(obpm_cuda ${CUDA_SOURCES} src/cuda_Main.cu)
             #add_executable(obpm_cuda ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
-            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu bpm/wabpm.cu src/cuda_Main.cu)
+            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu bpm/wabpm.cu bpm/wabpm.cpp bpm/modes.cpp src/cuda_Main.cu)
             #add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
 
             target_include_directories(obpm_cuda PUBLIC "${PROJECT_SOURCE_DIR}/include")
@@ -428,7 +428,7 @@ else()
         if(MSVC)
             set_source_files_properties(bpm/FDBPMpropagator.c PROPERTIES LANGUAGE CXX)
         endif()
-        add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c bpm/wabpm.cpp sol/solve_bpm.cpp src/sol_Main.cpp)
+        add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c bpm/wabpm.cpp bpm/modes.cpp sol/solve_bpm.cpp src/sol_Main.cpp)
         #target_link_libraries(obpm glfw)
         #target_link_libraries(obpm OpenGL::GL)
 

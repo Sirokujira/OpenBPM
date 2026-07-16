@@ -130,6 +130,7 @@ ctest --test-dir build --output-on-failure
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
 | `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
+| `launch` | `launch = <gauss\|mode [m]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モード #m (省略時 0 = 基本モード) を虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (振幅は `feed` 電圧、入力電力 = volt^2)。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
 
 - `polarization` / `wideangle` 指定時は倍精度の一般化伝搬エンジンを使用します
   (CPU 版 `bpm/wabpm.cpp` / CUDA 版 `bpm/wabpm.cu`、同一アルゴリズム)。
