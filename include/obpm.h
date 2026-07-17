@@ -212,6 +212,20 @@ EXTERN struct {
 	double converg;           // convergence
 } Solver;                     // solver
 
+typedef struct {
+	id_t   m;                 // material id
+	double beta;              // TPA coefficient beta [cm/GW] (input unit)
+} tpab_t;                     // two-photon absorption (BPM)
+
+EXTERN int          NTpaB;    // number of TPA materials (BPM)
+EXTERN tpab_t       *TpaB;    // TPA coefficients (BPM)
+
+EXTERN struct {
+	int    npoints;           // number of sweep points (0 = off : single run)
+	double pmin, pmax;        // input power range [W]
+	int    logscale;          // 0 = linear, 1 = log spacing
+} PowerSweep;                 // input power sweep (BPM, activation curve)
+
 EXTERN struct {
 	double w0;                // gaussian beam waist (1/e^2 intensity radius) [m] (0 = auto)
 	double x0, y0;            // beam center [m]
