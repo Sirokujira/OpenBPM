@@ -42,6 +42,22 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の生成と
+      # 単調飽和 (T が P_in について単調非増加、初点 T > 終点 T*1.5) を判定する
+      - name: Smoke test — ONN activation curve (TPA + powersweep)
+        run: |
+          mkdir -p /tmp/smoke-onn && cp data/sample/onn_activation.ofd /tmp/smoke-onn/
+          cd /tmp/smoke-onn
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 onn_activation.ofd
+          grep -q "normal end" obpm.log
+          test -s activation_curve.csv
+          awk -F, 'NR>1 { if (prev != "" && $3 > prev*1.000001) { print "not monotone at line " NR; exit 1 }
+                          if (first == "") first = $3
+                          prev = $3 }
+                   END  { if (NR < 9) { print "too few sweep points: " NR-1; exit 1 }
+                          if (!(first > prev*1.5)) { print "no saturation: first=" first ", last=" prev; exit 1 }
+                          print "activation curve OK: T " first " -> " prev }' activation_curve.csv
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -67,7 +83,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-logs
-          path: /tmp/smoke/*.log
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-onn/*.log
           if-no-files-found: ignore
 
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
@@ -109,6 +127,22 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の生成と
+      # 単調飽和 (T が P_in について単調非増加、初点 T > 終点 T*1.5) を判定する
+      - name: Smoke test — ONN activation curve (TPA + powersweep)
+        run: |
+          mkdir -p /tmp/smoke-onn && cp data/sample/onn_activation.ofd /tmp/smoke-onn/
+          cd /tmp/smoke-onn
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 onn_activation.ofd
+          grep -q "normal end" obpm.log
+          test -s activation_curve.csv
+          awk -F, 'NR>1 { if (prev != "" && $3 > prev*1.000001) { print "not monotone at line " NR; exit 1 }
+                          if (first == "") first = $3
+                          prev = $3 }
+                   END  { if (NR < 9) { print "too few sweep points: " NR-1; exit 1 }
+                          if (!(first > prev*1.5)) { print "no saturation: first=" first ", last=" prev; exit 1 }
+                          print "activation curve OK: T " first " -> " prev }' activation_curve.csv
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -132,7 +166,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-logs-macos
-          path: /tmp/smoke/*.log
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-onn/*.log
           if-no-files-found: ignore
 
   # Windows (MSVC)。依存は vcpkg (x64-windows-static-md 静的リンク) で導入し、
@@ -180,6 +216,25 @@ jobs:
           Set-Location smoke
           if (-not (Test-Path bpm_ixz.csv)) { Write-Error "bpm_ixz.csv missing"; exit 1 }
 
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の生成と
+      # 単調飽和 (T が P_in について単調非増加、初点 T > 終点 T*1.5) を判定する
+      - name: Smoke test — ONN activation curve (TPA + powersweep)
+        run: |
+          New-Item -ItemType Directory -Force smoke-onn | Out-Null
+          Copy-Item data/sample/onn_activation.ofd smoke-onn/
+          Set-Location smoke-onn
+          & "$env:GITHUB_WORKSPACE\bin\obpm.exe" -n 2 onn_activation.ofd
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Select-String -Path obpm.log -Pattern "normal end" -Quiet)) { Write-Error "no normal end"; exit 1 }
+          if (-not (Test-Path activation_curve.csv)) { Write-Error "activation_curve.csv missing"; exit 1 }
+          $t = Import-Csv activation_curve.csv | ForEach-Object { [double]$_.transmission }
+          if ($t.Count -lt 8) { Write-Error "too few sweep points: $($t.Count)"; exit 1 }
+          for ($i = 1; $i -lt $t.Count; $i++) {
+            if ($t[$i] -gt $t[$i-1] * 1.000001) { Write-Error "not monotone at point $i"; exit 1 }
+          }
+          if (-not ($t[0] -gt $t[-1] * 1.5)) { Write-Error "no saturation: first=$($t[0]), last=$($t[-1])"; exit 1 }
+          Write-Output "activation curve OK: T $($t[0]) -> $($t[-1])"
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -205,5 +260,6 @@ jobs:
           name: smoke-logs-windows
           path: |
             smoke/*.log
+            smoke-onn/*.log
             smoke-rcwa/*.log
           if-no-files-found: ignore
