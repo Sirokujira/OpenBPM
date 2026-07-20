@@ -133,6 +133,56 @@ CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する
 
 ---
 
+# 第 3 回監査 (機能 × 実装パスの網羅精査)
+
+第 2 回監査の対応 (CI テスト組込・TPA 解析解検証・CUDA 警告) 後の現行コードに対し、
+カーネルが持つ機能と入力キーワード・実装パスの対応関係を精査した追加の洗い出し。
+
+## 中優先度
+
+- [ ] **モードソルバがソルバ入力から利用できない (ライブラリのみ)**
+  - 場所: `bpm/modes.cpp` (`wabpm_find_modes`) / `sol/input_data.c` / `sol/solve_bpm.cpp`
+  - 現状: モードソルバは実装・テスト済みだが、`obpm` の入力キーワードから実行する
+    経路がなく、C++ API (`wabpm_find_modes` / `allset.hpp` の `findModes`) 経由でしか
+    使えない。
+  - 対応案: 入力キーワード (例: `modes = <nModes>`) を追加し、
+    (1) 求めたモードと neff を HDF5 (`/modes/...`) に出力、
+    (2) オプションで入射ビームを基本モードで初期化 (`beam = mode` 等) して
+    LP01 整合励振 (現状は Marcuse 近似の w0 手動指定) を可能にする。
+
+- [ ] **テーパ / ツイスト機能が未公開 (カーネルは対応済み)**
+  - 場所: `bpm/FDBPMpropagator.c` (`taperPerStep` / `twistPerStep`、BPM-MATLAB 由来) /
+    `sol/solve_bpm.cpp:146-147` (常に 0 を設定)
+  - 現状: 近軸カーネルは導波路のテーパ (スケーリング) とツイスト (回転) の座標変換に
+    対応しているが、入力キーワードがなく常に無効。現状テーパは `data/fiber_taper.ofd` の
+    ように geometry の階段近似で代用している。
+  - 対応案: 入力キーワード (例: `taper = <rate>` / `twist = <rad/m>`) を追加して
+    カーネル機能を公開する (2D RIP 前提のため近軸パス限定。拡張パスとの併用は不可と明記)。
+
+## 低優先度
+
+- [ ] **対称境界 (xSymmetry / ySymmetry) が未公開 (カーネルは対応済み)**
+  - 場所: `bpm/FDBPMpropagator.c` (対称境界対応) / `sol/solve_bpm.cpp:123-124` (常に 0)
+  - 現状: 対称構造で計算領域を 1/2〜1/4 にできるカーネル機能が使われていない。
+  - 対応案: 入力キーワードで公開する (最適化のため機能追加の優先度は低)。
+
+- [ ] **Windows CI のテストカバレッジが Linux/macOS より狭い**
+  - 場所: `.github/workflows/ci.yml` (build-windows ジョブ)
+  - 現状: Windows は単体テスト (ctest) を実行せず、ONN スモークも単調性判定のみ
+    (解析解 ±8% 判定は Linux/macOS のみ)。
+  - 対応案: Windows ジョブにも `-DWITH_TESTS=ON` + ctest を追加し、
+    ONN 判定を PowerShell 版解析解比較 (または Git Bash で `check_activation.sh`) に揃える。
+
+## 補足: 精査したが「対応済み / 対応不要」と判断した項目
+
+- 分散性材料 (`material = 2 <einf> ...`) は BPM では `einf` 近似で処理される
+  (単一波長計算のため妥当、`sol/solve_bpm.cpp:75-77` にコメントあり)。
+- `beamtilt` は拡張パス (wabpm) でも初期界の位相ランプとして反映済み。
+- `powersweep` の掃引ループは近軸/拡張の両パスを内包しており併用可能。
+- `bend` は近軸 (CPU/CUDA)・拡張 (CPU/CUDA) の全パスで等価屈折率法に対応済み。
+
+---
+
 ## テスト
 
 `-DWITH_TESTS=ON` で以下の単体テストがビルドされる (`ctest` で実行):
