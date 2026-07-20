@@ -86,23 +86,20 @@ CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する
 
 ## 高優先度
 
-- [ ] **CUDA 版が `tpa` / `powersweep` 未対応 (サイレント無視)**
-  - 場所: `cuda/solve_bpm.cu` (TPA/PowerSweep への参照が一切ない)
-  - 現状: CPU 版は近軸/拡張の両パスで TPA と掃引に対応済みだが、CUDA 版は入力に
-    `tpa` / `powersweep` があっても**警告なしで無視**して線形の単発計算を行う。
-    ReadMe には既知事項として記載済みだが、実行時に気づけないのが問題。
-  - 対応案 (段階):
-    1. 【小】`cuda/solve_bpm.cu` に「tpa/powersweep は CUDA 版未対応」の実行時警告を追加
-    2. 【大】TPA 減衰カーネル (E *= exp(-β/2·|E|²·Δz), 要素毎) を `bpm/wabpm.cu` と
-       近軸 CUDA パスに実装し、掃引ループを移植 (GPU 実機がないため実行検証は不可、
-       コンパイル検証のみ可能)
+- [ ] **CUDA 版が `tpa` / `powersweep` 未対応** (⚠ サイレント無視は解消済み)
+  - 場所: `cuda/solve_bpm.cu`
+  - 対応状況:
+    1. ✅【小】実行時警告を追加済み (「tpa / powersweep are not supported in CUDA version」
+       を表示して線形の単発計算にフォールバック)。ReadMe も更新。CUDA 12.0 でコンパイル検証済み
+    2. 【大・未対応】TPA 減衰カーネル (E *= exp(-β/2·|E|²·Δz), 要素毎) を `bpm/wabpm.cu` と
+       近軸 CUDA パスに実装し、掃引ループを移植する (GPU 実機がないため実行検証は不可、
+       コンパイル検証のみ可能。着手前に要方針判断)
 
-- [ ] **CI が単体テストを実行していない**
+- [x] **CI が単体テストを実行していない** ✅ 対応済み
   - 場所: `.github/workflows/ci.yml`
-  - 現状: ビルド + サンプル実行のスモークのみで、`-DWITH_TESTS=ON` + `ctest`
-    (test_wabpm / test_modes / test_allset の解析解検証 20 項目) が CI に組み込まれていない。
-  - 対応案: Linux ジョブに `WITH_TESTS=ON` を追加し `ctest --output-on-failure` を実行
-    (テストは外部依存が OpenMP/Eigen のみなので CI 環境でそのまま動く)。
+  - 対応内容: Linux / macOS ジョブの configure に `-DWITH_TESTS=ON` を追加し、
+    ビルド直後に `ctest --output-on-failure` (test_wabpm / test_modes / test_allset の
+    解析解検証) を実行するステップを追加した。
 
 ## 中優先度
 
@@ -113,12 +110,12 @@ CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する
   - 対応案: ADI の領域分割 (行/列方向の転置通信) が必要で規模が大きい。
     需要の有無を判断のうえ、対応しない場合は ReadMe に「MPI 版は FDTD のみ」と明記する。
 
-- [ ] **TPA の解析解との数値回帰テストがない**
-  - 場所: `.github/workflows/ci.yml` (スモークは単調性と飽和のみ確認) / `tests/`
-  - 現状: ReadMe には「解析解 T = ln(1+βI₀L_eff)/(βI₀L) と ±7% 以内で一致」と記載が
-    あるが、CI では数値一致まで検証していない。
-  - 対応案: `activation_curve.csv` の各点を解析解と比較する検証 (awk または Python) を
-    CI スモークに追加する。
+- [x] **TPA の解析解との数値回帰テストがない** ✅ 対応済み
+  - 場所: `.github/workflows/ci.yml` / `tools/check_activation.sh` (新規)
+  - 対応内容: `activation_curve.csv` の全掃引点を平面波近似の解析解
+    `T = 1/(1 + β·(P_in/A_eff)·L)` と比較する検証スクリプトを追加し (A_eff / L は
+    obpm.log から自動取得、許容 ±8%)、Linux / macOS の ONN スモークを単調飽和判定から
+    このスクリプト呼び出しに置き換えた。ローカル実行で全 8 点一致 (最大誤差 4.1%) を確認。
 
 ## 低優先度
 

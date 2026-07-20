@@ -165,14 +165,19 @@ ctest --test-dir build --output-on-failure
   解析解との差が拡大します (平面波近似の限界)。
 - `/field` 出力 (Ixz/Efinal/frames) は最終掃引点 (最大パワー) の結果です。
 - `wideangle` / `polarization` の一般化伝搬エンジンとも併用できます。
-  CUDA 版 (`obpm_cuda`) は現状 `tpa` / `powersweep` に未対応です (無視されます)。
+  CUDA 版 (`obpm_cuda`) は現状 `tpa` / `powersweep` に未対応です
+  (指定時は警告を表示して線形の単発計算になります。CPU 版 `obpm` を使用してください)。
 
 ## CI / Release
 
 - push / PR ごとに Linux (gcc) と macOS (AppleClang + Homebrew libomp/Eigen)
   で CPU ビルド + `data/sample/fiber.ofd` のスモーク実行 (`normal end` 判定)
+- 解析解と比較する単体テスト (`ctest` : test_wabpm / test_modes / test_allset) を
+  Linux / macOS で実行
 - `data/sample/onn_activation.ofd` の ONN 活性化関数スモーク
-  (`activation_curve.csv` の生成 + 透過率の単調飽和判定) を 3 OS で実行
+  (`activation_curve.csv` の単調飽和 + 平面波近似の解析解
+  `T = 1/(1 + beta*(P_in/A_eff)*L)` との ±8% 一致判定, `tools/check_activation.sh`)
+  を 3 OS で実行 (解析解判定は Linux / macOS)
 - ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64`) に保存
 - `v*` タグを push すると GitHub Release にバイナリが自動添付されます
 

@@ -264,6 +264,14 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		fprintf(stdout, "%s\n", str);
 	}
 
+	// TPA (tpa) / パワー掃引 (powersweep) は CUDA 版では未対応 :
+	// 指定されていても線形の単発計算になるため、明示的に警告を出す
+	if ((NTpaB > 0) || (PowerSweep.npoints > 0)) {
+		sprintf(str, "*** warning : tpa / powersweep are not supported in CUDA version (ignored). Use CPU version (obpm) instead.");
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
+
 	// 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
 	float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
 	floatcomplex *Erow = (floatcomplex *)malloc(P->Nx * sizeof(floatcomplex));

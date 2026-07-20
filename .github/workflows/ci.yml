@@ -24,10 +24,14 @@ jobs:
           sudo apt-get install -y cmake gcc g++ libhdf5-dev libeigen3-dev
 
       - name: Configure (CPU only)
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(nproc)"
+
+      # 解析解と比較する単体テスト (test_wabpm / test_modes / test_allset)
+      - name: Unit tests (ctest)
+        run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
         run: |
@@ -42,8 +46,8 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
-      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の生成と
-      # 単調飽和 (T が P_in について単調非増加、初点 T > 終点 T*1.5) を判定する
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の単調飽和と
+      # 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) との数値一致 (±8%) を判定する
       - name: Smoke test — ONN activation curve (TPA + powersweep)
         run: |
           mkdir -p /tmp/smoke-onn && cp data/sample/onn_activation.ofd /tmp/smoke-onn/
@@ -51,12 +55,7 @@ jobs:
           "$GITHUB_WORKSPACE/bin/obpm" -n 2 onn_activation.ofd
           grep -q "normal end" obpm.log
           test -s activation_curve.csv
-          awk -F, 'NR>1 { if (prev != "" && $3 > prev*1.000001) { print "not monotone at line " NR; exit 1 }
-                          if (first == "") first = $3
-                          prev = $3 }
-                   END  { if (NR < 9) { print "too few sweep points: " NR-1; exit 1 }
-                          if (!(first > prev*1.5)) { print "no saturation: first=" first ", last=" prev; exit 1 }
-                          print "activation curve OK: T " first " -> " prev }' activation_curve.csv
+          sh "$GITHUB_WORKSPACE/tools/check_activation.sh" activation_curve.csv obpm.log
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
@@ -104,7 +103,7 @@ jobs:
       - name: Configure (CPU only)
         run: |
           OMP="$(brew --prefix libomp)"
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF \
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
             -DOpenMP_C_LIB_NAMES=omp \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
@@ -113,6 +112,10 @@ jobs:
 
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      # 解析解と比較する単体テスト (test_wabpm / test_modes / test_allset)
+      - name: Unit tests (ctest)
+        run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
         run: |
@@ -127,8 +130,8 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
-      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の生成と
-      # 単調飽和 (T が P_in について単調非増加、初点 T > 終点 T*1.5) を判定する
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の単調飽和と
+      # 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) との数値一致 (±8%) を判定する
       - name: Smoke test — ONN activation curve (TPA + powersweep)
         run: |
           mkdir -p /tmp/smoke-onn && cp data/sample/onn_activation.ofd /tmp/smoke-onn/
@@ -136,12 +139,7 @@ jobs:
           "$GITHUB_WORKSPACE/bin/obpm" -n 2 onn_activation.ofd
           grep -q "normal end" obpm.log
           test -s activation_curve.csv
-          awk -F, 'NR>1 { if (prev != "" && $3 > prev*1.000001) { print "not monotone at line " NR; exit 1 }
-                          if (first == "") first = $3
-                          prev = $3 }
-                   END  { if (NR < 9) { print "too few sweep points: " NR-1; exit 1 }
-                          if (!(first > prev*1.5)) { print "no saturation: first=" first ", last=" prev; exit 1 }
-                          print "activation curve OK: T " first " -> " prev }' activation_curve.csv
+          sh "$GITHUB_WORKSPACE/tools/check_activation.sh" activation_curve.csv obpm.log
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
