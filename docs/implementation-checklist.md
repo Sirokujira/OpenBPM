@@ -79,6 +79,63 @@ OpenBPM のコードベース調査により判明した「実装漏れ・未実
 
 ---
 
+# 第 2 回監査 (main = c9a7d94 時点)
+
+TPA 非線形・パワー掃引 (PR #8)、obpm_post の BPM 可視化 (PR #6)、
+CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する再監査。
+
+## 高優先度
+
+- [ ] **CUDA 版が `tpa` / `powersweep` 未対応 (サイレント無視)**
+  - 場所: `cuda/solve_bpm.cu` (TPA/PowerSweep への参照が一切ない)
+  - 現状: CPU 版は近軸/拡張の両パスで TPA と掃引に対応済みだが、CUDA 版は入力に
+    `tpa` / `powersweep` があっても**警告なしで無視**して線形の単発計算を行う。
+    ReadMe には既知事項として記載済みだが、実行時に気づけないのが問題。
+  - 対応案 (段階):
+    1. 【小】`cuda/solve_bpm.cu` に「tpa/powersweep は CUDA 版未対応」の実行時警告を追加
+    2. 【大】TPA 減衰カーネル (E *= exp(-β/2·|E|²·Δz), 要素毎) を `bpm/wabpm.cu` と
+       近軸 CUDA パスに実装し、掃引ループを移植 (GPU 実機がないため実行検証は不可、
+       コンパイル検証のみ可能)
+
+- [ ] **CI が単体テストを実行していない**
+  - 場所: `.github/workflows/ci.yml`
+  - 現状: ビルド + サンプル実行のスモークのみで、`-DWITH_TESTS=ON` + `ctest`
+    (test_wabpm / test_modes / test_allset の解析解検証 20 項目) が CI に組み込まれていない。
+  - 対応案: Linux ジョブに `WITH_TESTS=ON` を追加し `ctest --output-on-failure` を実行
+    (テストは外部依存が OpenMP/Eigen のみなので CI 環境でそのまま動く)。
+
+## 中優先度
+
+- [ ] **MPI 版は BPM 未対応 (FDTD ソルバのみ)**
+  - 場所: `src/mpi_Main.c` (`solve()` のみ呼び出し、`solve_bpm` への分岐なし)、`mpi/`
+  - 現状: `-DWITH_MPI=ON` でビルドされる MPI 版は OpenFDTD 由来の時間領域ソルバで、
+    BPM 伝搬は実行できない。
+  - 対応案: ADI の領域分割 (行/列方向の転置通信) が必要で規模が大きい。
+    需要の有無を判断のうえ、対応しない場合は ReadMe に「MPI 版は FDTD のみ」と明記する。
+
+- [ ] **TPA の解析解との数値回帰テストがない**
+  - 場所: `.github/workflows/ci.yml` (スモークは単調性と飽和のみ確認) / `tests/`
+  - 現状: ReadMe には「解析解 T = ln(1+βI₀L_eff)/(βI₀L) と ±7% 以内で一致」と記載が
+    あるが、CI では数値一致まで検証していない。
+  - 対応案: `activation_curve.csv` の各点を解析解と比較する検証 (awk または Python) を
+    CI スモークに追加する。
+
+## 低優先度
+
+- [ ] **obpm_post が `/field/frames` 未対応**
+  - 場所: `post/postbpm.c` (Ixz と Efinal のみ描画)
+  - 現状: `frames = <interval>` で記録したスナップショットは `tools/plot_ixz.py` (GIF)
+    でのみ可視化でき、obpm_post のページ出力には含まれない。
+  - 対応案: 需要があれば postbpm.c にフレームのページ出力を追加 (現状は Python 側で充足)。
+
+- [ ] **半ベクトル (pol=x/y) 指定時のモードソルバの直交化が近似**
+  - 場所: `bpm/modes.cpp` (冒頭コメントに記載)
+  - 現状: Stern 差分は非対称のため、半ベクトル演算子での Gram-Schmidt deflation は
+    厳密には随伴モードを使うべき。スカラー使用では問題なし。
+  - 対応案: 半ベクトルモード解析の需要が生じた時点で随伴系の deflation を実装。
+
+---
+
 ## テスト
 
 `-DWITH_TESTS=ON` で以下の単体テストがビルドされる (`ctest` で実行):
