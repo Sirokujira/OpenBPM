@@ -3,6 +3,7 @@
   "permissions": {
     "allow": [
       "Bash(cmake:*)",
+      "Bash(ctest:*)",
       "Bash(make:*)",
       "Bash(ninja:*)",
       "Bash(git status:*)",
@@ -13,7 +14,11 @@
       "Bash(rg:*)",
       "Bash(ls:*)",
       "Bash(./bin/obpm:*)",
-      "Bash(./bin/obpm_post:*)"
+      "Bash(./bin/obpm_post:*)",
+      "Bash(bin/obpm:*)",
+      "Bash(bin/obpm_post:*)",
+      "Bash(python3 tools/plot_ixz.py:*)",
+      "Bash(sh tools/check_activation.sh:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
