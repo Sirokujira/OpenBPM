@@ -90,6 +90,7 @@ ctest --test-dir build --output-on-failure
 | `test_modes` | ステップインデックスファイバ LP01/LP11 の実効屈折率 (分散方程式の厳密解と比較)、モード直交性 |
 | `test_allset` | `findModes` / `modeSuperposition` / `offsetField` / `tiltField` (P_Struct API) |
 | `test_fdbpm` | スカラー近軸カーネル (既定経路, `bpm/FDBPMpropagator.c`) の自由空間回折 `w(z)`、エネルギー保存、一様吸収 `exp(-2*k0*n''*z)`、ビーム中心保持 |
+| `onn_activation_solver` / `_check` | ONN 光活性化関数の結合テスト。`data/sample/onn_activation.ofd` を実行し、`activation_curve.csv` を解析解 `T = 1/(1 + beta*(P_in/A_eff)*L)` と比較 (相対 7% 以内)。単調非増加・飽和・`P_out <= P_in` も検査 (`tests/check_activation.py`、CI の 3 OS でも同一スクリプトを使用) |
 
 ## 実行
 

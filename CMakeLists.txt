@@ -504,6 +504,28 @@ if (WITH_TESTS)
     add_test(NAME modes_unit COMMAND test_modes)
     add_test(NAME allset_unit COMMAND test_allset)
     add_test(NAME fdbpm_unit COMMAND test_fdbpm)
+
+    # ONN 光活性化関数 (TPA + powersweep) の結合テスト:
+    # ソルバーを実際に走らせ、activation_curve.csv を平面波近似の解析解
+    # T = 1/(1 + beta*(P_in/A_eff)*L) と比較する (Python は標準ライブラリのみ)。
+    # obpm 本体を使うため WITH_MPI/WITH_CUDA 無効の CPU ビルドでのみ登録する。
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_FOUND AND TARGET obpm)
+        set(ONN_TEST_DIR "${CMAKE_BINARY_DIR}/onn_test")
+        file(MAKE_DIRECTORY "${ONN_TEST_DIR}")
+        add_test(NAME onn_activation_solver
+                 COMMAND $<TARGET_FILE:obpm> -n 2 -no-fdtd-out
+                         "${CMAKE_SOURCE_DIR}/data/sample/onn_activation.ofd"
+                 WORKING_DIRECTORY "${ONN_TEST_DIR}")
+        add_test(NAME onn_activation_check
+                 COMMAND ${Python3_EXECUTABLE}
+                         "${CMAKE_SOURCE_DIR}/tests/check_activation.py"
+                         --dir "${ONN_TEST_DIR}"
+                 WORKING_DIRECTORY "${ONN_TEST_DIR}")
+        # ソルバー実行 -> 検証 の順序を保証する
+        set_tests_properties(onn_activation_solver PROPERTIES FIXTURES_SETUP onn_run)
+        set_tests_properties(onn_activation_check  PROPERTIES FIXTURES_REQUIRED onn_run)
+    endif()
 endif()
 
 #custom viewer
