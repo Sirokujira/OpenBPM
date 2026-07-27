@@ -121,7 +121,9 @@ ctest --test-dir build --output-on-failure
 - 結果は `time_series_data.h5` (HDF5) に出力されます
   (`/field/Efinal_r`, `/field/Efinal_i` : 最終電界、`/field/n_out_r` : 屈折率分布、
   `/field/Ixz` : 伝搬マップ |E(x, y=Ny/2, z)|^2 (Nz x Nx)、
-  `/metadata/lambda`, `/metadata/n_0`, `/metadata/beam_w0` : BPM パラメータ)。
+  `/metadata/lambda`, `/metadata/n_0`, `/metadata/beam_w0` : BPM パラメータ、
+  `/metadata/mode_neff` : モード励振 (`launch = mode`) 時の実効屈折率
+  (ガウシアン励振では 0))。
 
 ### BPM 用キーワード (OpenFDTD 形式の拡張)
 
@@ -132,7 +134,7 @@ ctest --test-dir build --output-on-failure
 | `bend` | `bend = <RoC[m]> [<dir[deg]> [<rho_e>]]` | 曲げ半径 (等価屈折率法 n_eq = n*exp(x/RoC))。dir は曲げ方向 (0 = +x)、rho_e は弾性光学係数。省略時は直線 |
 | `polarization` | `polarization = <scalar\|x\|y>` | 半ベクトル BPM の偏波方向。x/y 指定時は偏波方向の界面で D 法線成分連続 (Stern 差分) を反映。省略時はスカラー |
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
-| `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
+| `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ)。`launch = mode` と併用した場合はモード界にも同じ位相ランプが適用される |
 | `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
 | `launch` | `launch = <gauss\|mode [m]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モード #m (省略時 0 = 基本モード) を虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (振幅は `feed` 電圧、入力電力 = volt^2)。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |

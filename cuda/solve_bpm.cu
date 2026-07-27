@@ -253,6 +253,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	// モード励振 (launch = mode <m>) : 先頭スライスの屈折率分布から導波モードを
 	// 虚軸伝搬法 (bpm/modes.cpp) で求め、ガウシアンの代わりに励振する。
 	// 振幅は feed 電圧 (モードは L2 正規化済みのため入力電力 = volt^2)。
+	// beamtilt 指定時はガウシアンと同じ位相ランプをモード界にも掛ける。
+	double mode_neff = 0;   // HDF5 /metadata/mode_neff (モード励振時のみ > 0)
 	if (BPM.launchMode >= 0) {
 		const long Nm = (long)Nx * Ny;
 		std::complex<double> *n2m = new std::complex<double>[Nm];
@@ -285,17 +287,32 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		    const int nFound = wabpm_find_modes(&Wm, n2m, m + 1, 20000, 1e-10, modes, neff);
 		    if (nFound >= m + 1) {
 				const double volt = (NFeed > 0) ? Feed[0].volt : 1;
+				// 入射ビームの傾き (beamtilt =) : ガウシアンと同じ横方向波数の
+				// 位相ランプをモード界にも適用する (位相基準はビーム中心)
+				const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
+				const double kty = k0 * P->n_0 * sin(BPM.tilty * DTOR);
 				double power = 0;
 				for (long i = 0; i < Nm; i++) {
-				    const std::complex<double> em = volt * modes[(size_t)m * Nm + i];
+				    const long ix = i % Nx;
+				    const long iy = i / Nx;
+				    const double ph = -(ktx * (Xc[ix] - xc0)) - (kty * (Yc[iy] - yc0));
+				    const std::complex<double> em = volt * modes[(size_t)m * Nm + i]
+				                                  * std::complex<double>(cos(ph), sin(ph));
 				    floatcomplex e = {(float)em.real(), (float)em.imag()};
 				    P->E1[i] = e;
 				    power += std::norm(em);
 				}
 				P->precisePower = power;
+				mode_neff = neff[m];
 				sprintf(str, "launch : mode %d, neff = %.6f (found %d)", m, neff[m], nFound);
 				if (io) fprintf(fp, "%s\n", str);
 				fprintf(stdout, "%s\n", str);
+				if ((BPM.tiltx != 0) || (BPM.tilty != 0)) {
+				    sprintf(str, "launch : beamtilt (%.3f, %.3f) [deg] applied to the mode field",
+				            BPM.tiltx, BPM.tilty);
+				    if (io) fprintf(fp, "%s\n", str);
+				    fprintf(stdout, "%s\n", str);
+				}
 				launched = 1;
 		    }
 		    delete[] modes;
@@ -679,7 +696,9 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			{"frame_interval", &frame_interval_d},
 			{"grid_dx", &Dx},
 			{"grid_dy", &Dy},
-			{"grid_dz", &Dz}
+			{"grid_dz", &Dz},
+			// モード励振 (launch = mode) 時の実効屈折率。ガウシアン励振では 0
+			{"mode_neff", &mode_neff}
 		};
 		for (size_t i = 0; i < sizeof(bpm_metadata) / sizeof(bpm_metadata[0]); i++) {
 			dataspace_id = H5Screate(H5S_SCALAR);
