@@ -78,6 +78,7 @@ int input_data(FILE *fp)
 	BPM.frames = 0;   // 0 = スナップショット記録なし
 	BPM.launchMode = -1;  // -1 = ガウシアン励振 (既定)
 	BPM.launchNModes = 0; // 0 = ガウシアン励振
+	BPM.wlsweep = 0;      // 0 = 先頭波長のみ (既定)
 
 	// 非線形吸収 (TPA) と入力パワー掃引 (省略時は従来動作 = 線形単発)
 	NTpaB = 0;
@@ -567,6 +568,11 @@ int input_data(FILE *fp)
 				printf(errfmt2, strkey);
 				return 1;
 			}
+		}
+		else if (!strcmp(strkey, "wlsweep")) {
+			// wlsweep = <0|1> : 波長掃引 (frequency2 の全点を順に計算する)
+			// 省略時 (0) は先頭周波数のみ = 従来動作
+			BPM.wlsweep = atoi(token[2]);
 		}
 		else if (!strcmp(strkey, "tpa")) {
 			// tpa = <material id> <beta[cm/GW]> : 二光子吸収 (TPA) 係数

@@ -242,6 +242,7 @@ EXTERN struct {
 	double tiltx, tilty;      // beam tilt angle [deg]
 	int    frames;            // |E(x,y)|^2 snapshot interval [z-steps] (0 = off)
 	int    launchMode;        // launch: -1 = gaussian (default), >=0 = guided mode #m (先頭モード)
+	int    wlsweep;           // 1 = sweep all frequency2 points (0 = first only, default)
 	int    launchNModes;      // number of superposed modes (0 = gaussian)
 	int    launchIdx[BPM_MAX_LAUNCH_MODES];    // mode indices
 	double launchCoef[BPM_MAX_LAUNCH_MODES];   // superposition coefficients

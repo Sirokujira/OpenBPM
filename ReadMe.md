@@ -28,7 +28,7 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 >   (その場合 `obpm_post` の FDTD 量描画は不可、BPM の H5 出力は影響なし)。
 > - BPM ソルバーで無効な入力キーワード (`planewave`/`point`/`load`/`rfeed`/
 >   `abc = 1`/`pbc`) は実行時に warning を表示して無視します。
->   波長掃引は未対応 (`frequency2` の先頭周波数のみ使用)。
+>   波長掃引は `wlsweep = 1` で有効 (省略時は `frequency2` の先頭周波数のみ使用)。
 >   分散性材料 (type 2) は einf 近似です。
 
 ## ビルド
@@ -46,7 +46,7 @@ cmake --build build -j
   - `obpm_cuda` は CPU 版と同じ BPM 機能 (beam/refindex/導電率吸収/メッシュ警告/bend/
     beamtilt、広角 `wideangle`・半ベクトル `polarization` を含む) に対応しています。
     スカラー近軸は `bpm/FDBPMpropagator.cu`、広角/半ベクトルは `bpm/wabpm.cu` を使用します。
-  - **`tpa` / `powersweep` (ONN 光活性化関数) は CPU 版のみ**です。CUDA 版で
+  - **`tpa` / `powersweep` (ONN 光活性化関数) と `wlsweep` (波長掃引) は CPU 版のみ**です。CUDA 版で
     指定した場合は実行時に warning を表示して無視します (CPU 版 `obpm` を使用してください)。
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI + 並列 HDF5。例: `libopenmpi-dev libhdf5-openmpi-dev`)
@@ -100,6 +100,7 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `data/fiber.ofd` | 光ファイバ (SMF-28 相当, コア半径 4.1um, V=2.26 シングルモード)。LP01 モードの閉じ込め (Marcuse 近似 w=4.7um と比較可能) |
 | `data/fiber_offset.ofd` | 光ファイバへの軸ずれ入射 (2um オフセット)。コア中心への引き込みと結合損失 |
+| `data/spectrum_sweep.ofd` | 波長掃引 (`wlsweep = 1`、1.50-1.60um の 5 点)。`spectrum.csv` に透過率スペクトルを出力 |
 | `data/fiber_mode_superposition.ofd` | MMF の LP01+LP11 重ね合わせ励振 (`launch = mode 0 1`)。モードビート (実測周期 5710um / 理論 λ/Δneff = 5762um) |
 | `data/fiber_mmf.ofd` | マルチモードファイバ (コア径 50um, NA=0.2, V=20.3)。オフセット励振によるコア内反射と閉じ込め |
 | `data/fiber_splice.ofd` | コア径不整合の融着接続 (4.1um -> 2.0um)。接続点でのモード変換と放射 (理論 T=0.83) |
@@ -141,6 +142,7 @@ ctest --test-dir build --output-on-failure
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ)。`launch = mode` と併用した場合はモード界にも同じ位相ランプが適用される |
 | `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
 | `launch` | `launch = <gauss\|mode [<m>[:<coef>] ...]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モードを虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (引数省略時は基本モード 0)。複数指定すると**重ね合わせ**、`<m>:<coef>` で係数を与える (省略時 1、最大 8 モード)。入力電力は係数に依らず `feed` 電圧^2 に正規化されるため係数は分岐比のみを決める。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
+| `wlsweep` | `wlsweep = <0\|1>` | 波長掃引。`frequency2` の全点を順に計算し、各波長の透過率を `spectrum.csv` (lambda_m, frequency_Hz, transmission) へ出力する。`/field` と HDF5 メタデータは**最終波長**の結果。省略時 (0) は先頭波長のみ = 従来動作。**CPU 版のみ** |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
 | `powersweep` | `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log\|lin]` | 入力パワー掃引 (既定 lin)。`activation_curve.csv` に P_out(P_in) を出力。省略時は従来の単発計算 |
 

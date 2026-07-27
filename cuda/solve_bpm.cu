@@ -90,6 +90,7 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	        // (サイレント無視を避けるため明示的に警告する)
 	        {NTpaB > 0,                "tpa (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
 	        {PowerSweep.npoints > 0,   "powersweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
+	        {BPM.wlsweep != 0,         "wlsweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
 	    };
 	    for (size_t n = 0; n < sizeof(ignored) / sizeof(ignored[0]); n++) {
 	        if (ignored[n].cond) {

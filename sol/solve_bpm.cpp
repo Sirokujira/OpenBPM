@@ -8,6 +8,8 @@
 
 // 光活性化関数曲線 (powersweep 指定時に出力)
 #define FN_activation "activation_curve.csv"
+// 波長スペクトル (wlsweep 指定時に出力)
+#define FN_spectrum   "spectrum.csv"
 
 #include "bpm/bpm_prototype.h"
 #include "bpm/wabpm.h"
@@ -61,7 +63,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     if      (NFreq2 > 0) lambda = SPEED_OF_LIGHT / Freq2[0];
     else if (NFreq1 > 0) lambda = SPEED_OF_LIGHT / Freq1[0];
     else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
-    const double k0 = (2 * PI) / lambda;
+    double k0 = (2 * PI) / lambda;
 
     // BPM で無効な入力キーワードの警告 (パースはされるが伝搬には反映されない)
     {
@@ -80,8 +82,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 fprintf(stdout, "%s\n", str);
             }
         }
-        // 波長掃引は未対応 (先頭周波数のみ使用)
-        if ((NFreq2 > 1) || ((NFreq2 == 0) && (NFreq1 > 1))) {
+        // 波長掃引 (wlsweep) 未指定時は先頭周波数のみ使用する
+        if (!BPM.wlsweep && ((NFreq2 > 1) || ((NFreq2 == 0) && (NFreq1 > 1)))) {
             sprintf(str, "*** warning : multiple frequencies are not swept by the BPM solver (only the first is used).");
             if (io) fprintf(fp, "%s\n", str);
             fprintf(stdout, "%s\n", str);
@@ -194,11 +196,95 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny)*sizeof(floatcomplex)); //Output refractive index(Array)
 	P->multiplier = (float *)malloc((P->Nx * P->Ny)*sizeof(float));
 
+    #ifdef _OPENMP
+    bool useAllCPUs = false;
+    long numThreads = useAllCPUs || omp_get_num_procs() == 1? omp_get_num_procs(): omp_get_num_procs()-1;
+    #else
+    long numThreads = 1;
+    #endif
+    P->b = (floatcomplex *)malloc(numThreads*MAX(P->Nx,P->Ny)*sizeof(floatcomplex));
+
+    // 解放時の二重 free 防止用 (swapEPointers でポインタが入れ替わるため)
+    floatcomplex *E_in = P->E1;
+    floatcomplex *E_buf = P->E2;
+
+    // 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
+    float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
+
+    // |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
+    const int  frameInterval = BPM.frames;
+    const long nframes = (frameInterval > 0)
+        ? ((P->iz_end - P->iz_start - 1) / frameInterval + 1) : 0;
+    float *Frames = (nframes > 0)
+        ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
+    if (nframes > 0) {
+        sprintf(str, "frames : interval = %d steps, count = %ld", frameInterval, nframes);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
+
+    // 掃引・物理スケーリングの設定 (波長に依らない)
+    const int    sweep    = (PowerSweep.npoints > 0);
+    const int    nsweep   = sweep ? PowerSweep.npoints : 1;
+    const int    physcale = (sweep || haveTpa);   // 物理スケーリングの有無
+    double        E0rawpow = 0;
+    floatcomplex *E0 = NULL;                      // 初期界の保存 (掃引毎の再初期化用)
+    double *sweepPin = NULL, *sweepPout = NULL;
+    double w0 = 0, xc0 = 0, yc0 = 0;              // ビーム諸元 (HDF5 メタデータ用)
+    double mode_neff = 0;   // HDF5 /metadata/mode_neff (モード励振時のみ > 0)
+    double pinRaw = 0;      // 伝搬開始時の生の |E|^2 和 (透過率算出用)
+
+    // ============================================================
+    // 波長掃引ループ (wlsweep = 1 指定時のみ frequency2 の全点を計算する)
+    // 各波長で複素屈折率・ADI 係数・励振界を組み直して伝搬する。
+    // /field 出力 (Ixz/Efinal/frames) と HDF5 メタデータは最終波長の結果。
+    // 波長ごとの透過率は spectrum.csv に出力する。
+    // ============================================================
+    const int nwl = (BPM.wlsweep && (NFreq2 > 0)) ? NFreq2
+                  : ((BPM.wlsweep && (NFreq1 > 0)) ? NFreq1 : 1);
+    double *wlLambda = (double *)malloc(nwl * sizeof(double));
+    double *wlTrans  = (double *)malloc(nwl * sizeof(double));
+    if (nwl > 1) {
+        sprintf(str, "wlsweep : %d wavelengths", nwl);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
+
+    for (int iwl = 0; iwl < nwl; iwl++) {
+
+    // --- この波長に依存する量を組み直す ---
+    if (nwl > 1) {
+        lambda = SPEED_OF_LIGHT / ((NFreq2 > 0) ? Freq2[iwl] : Freq1[iwl]);
+        k0 = (2 * PI) / lambda;
+        // 複素屈折率 (導電率による吸収は omega 依存)
+        const double omega_w = 2 * PI * SPEED_OF_LIGHT / lambda;
+        for (int64_t m = 0; m < NMaterial; m++) {
+            double epsr, sgm;
+            if (Material[m].type == 2) { epsr = Material[m].einf; sgm = 0; }
+            else { epsr = Material[m].epsr; sgm = Material[m].esgm; }
+            if (epsr <= 0) epsr = 1;
+            const double sw = sgm / (omega_w * EPS0);
+            const double magw = sqrt((epsr * epsr) + (sw * sw));
+            floatcomplex vw = {(float)sqrt((magw + epsr) / 2), (float)sqrt((magw - epsr) / 2)};
+            n_mat[m] = vw;
+        }
+        if (BPM.n0 <= 0) {
+            int64_t nn0w = NA(Nx / 2, Ny / 2, 0);
+            P->n_0 = CREALF(n_mat[iEx[nn0w]]);
+        }
+        P->d  = (float)(-P->dz * k0);
+        P->ax = -I * (float)(P->dz / (4 * P->dx * P->dx * k0 * P->n_0));
+        P->ay = -I * (float)(P->dz / (4 * P->dy * P->dy * k0 * P->n_0));
+        sprintf(str, "wlsweep %d / %d : lambda = %.6e [m]", iwl + 1, nwl, lambda);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
+    wlLambda[iwl] = lambda;
+
     // 初期電界 (ガウシアンビーム) と端部吸収体 (multiplier) の設定
     // - ビームウェスト : 入力 (beam =) を優先し、未指定なら領域幅の 1/4
     // - ビーム中心    : 入力 (beam = w0 x0 y0) > 給電点 (feed) > 領域中心
     // - 振幅          : 給電点の電圧 (未指定なら 1)
-    double w0, xc0, yc0;
     {
         const double Lx = Xn[Nx] - Xn[0];
         const double Ly = Yn[Ny] - Yn[0];
@@ -246,7 +332,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 虚軸伝搬法 (bpm/modes.cpp) で求め、ガウシアンの代わりに励振する。
     // 振幅は feed 電圧 (モードは L2 正規化済みのため入力電力 = volt^2)。
     // beamtilt 指定時はガウシアンと同じ位相ランプをモード界にも掛ける。
-    double mode_neff = 0;   // HDF5 /metadata/mode_neff (モード励振時のみ > 0)
+    mode_neff = 0;
     if (BPM.launchMode >= 0) {
         const long Nm = (long)Nx * Ny;
         std::complex<double> *n2m = new std::complex<double>[Nm];
@@ -360,17 +446,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     //   - 実効断面積 A_eff = (∫|E|^2 dA)^2 / ∫|E|^4 dA を初期界から実計算する
     //     (平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) との比較用)
     // ============================================================
-    const int    sweep    = (PowerSweep.npoints > 0);
-    const int    nsweep   = sweep ? PowerSweep.npoints : 1;
-    const int    physcale = (sweep || haveTpa);   // 物理スケーリングの有無
-    const double E0rawpow = P->precisePower;      // 初期界の生の |E|^2 和 (面積要素なし)
-    floatcomplex *E0 = NULL;                      // 初期界の保存 (掃引毎の再初期化用)
-    double *sweepPin = NULL, *sweepPout = NULL;
+    E0rawpow = P->precisePower;                   // 初期界の生の |E|^2 和 (面積要素なし)
     if (physcale) {
-        E0 = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex));
+        if (E0 == NULL) {   // 確保は 1 回だけ (波長掃引でも再確保しない)
+            E0 = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex));
+            sweepPin  = (double *)malloc(nsweep * sizeof(double));
+            sweepPout = (double *)malloc(nsweep * sizeof(double));
+        }
         memcpy(E0, P->E1, (P->Nx * P->Ny) * sizeof(floatcomplex));
-        sweepPin  = (double *)malloc(nsweep * sizeof(double));
-        sweepPout = (double *)malloc(nsweep * sizeof(double));
         for (int n = 0; n < nsweep; n++) {
             if (!sweep) {
                 sweepPin[n] = 1;  // tpa のみ指定時の既定入力パワー [W]
@@ -417,18 +500,6 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
 
     P->EfieldPower = 0;
     P->precisePowerDiff = 0;
-    #ifdef _OPENMP
-    bool useAllCPUs = false;
-    long numThreads = useAllCPUs || omp_get_num_procs() == 1? omp_get_num_procs(): omp_get_num_procs()-1;
-    #else
-    long numThreads = 1;
-    #endif
-    P->b = (floatcomplex *)malloc(numThreads*MAX(P->Nx,P->Ny)*sizeof(floatcomplex));
-
-    // 解放時の二重 free 防止用 (swapEPointers でポインタが入れ替わるため)
-    floatcomplex *E_in = P->E1;
-    floatcomplex *E_buf = P->E2;
-
     fprintf(stdout, "initfield\n");
 
     // initial field
@@ -445,24 +516,6 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         if (io) fprintf(fp, "%s\n", str);
         fprintf(stdout, "%s\n", str);
     }
-
-    // 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
-    float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
-
-    // |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
-    const int  frameInterval = BPM.frames;
-    const long nframes = (frameInterval > 0)
-        ? ((P->iz_end - P->iz_start - 1) / frameInterval + 1) : 0;
-    float *Frames = (nframes > 0)
-        ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
-    if (nframes > 0) {
-        sprintf(str, "frames : interval = %d steps, count = %ld", frameInterval, nframes);
-        if (io) fprintf(fp, "%s\n", str);
-        fprintf(stdout, "%s\n", str);
-    }
-
-    // HDF5ファイルの作成
-    file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
     // ============================================================
     // 入力パワー掃引ループ (powersweep 未指定時は 1 回のみ実行)
@@ -487,6 +540,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         sprintf(str, "sweep %d / %d : P_in = %g [W]", isweep + 1, nsweep, Pin);
         fprintf(stdout, "%s\n", str);
     }
+    pinRaw = P->precisePower;   // 伝搬開始時の生の |E|^2 和 (透過率の分母)
 
     if (BPM.pol || BPM.wideangle) {
         // ============================================================
@@ -727,6 +781,42 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     }
 
     }  // 掃引ループ (isweep) 終了
+
+    // この波長の透過率 T = 出力パワー / 入力パワー (同一単位の生の |E|^2 和で算出)
+    {
+        double poutRaw = 0;
+        for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+            const floatcomplex e = P->Efinal[i];
+            poutRaw += ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+        }
+        wlTrans[iwl] = (pinRaw > 0) ? (poutRaw / pinRaw) : 0;
+        if (nwl > 1) {
+            sprintf(str, "wlsweep : lambda = %.6e [m] -> T = %.6f", lambda, wlTrans[iwl]);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+    }
+
+    }  // 波長掃引ループ (iwl) 終了
+
+    // HDF5ファイルの作成 (波長掃引時は最終波長の結果を格納する)
+    file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+
+    // 波長スペクトル (透過率) の CSV 出力
+    if (nwl > 1) {
+        FILE *fspec = fopen(FN_spectrum, "w");
+        if (fspec != NULL) {
+            fprintf(fspec, "lambda_m,frequency_Hz,transmission\n");
+            for (int n = 0; n < nwl; n++) {
+                fprintf(fspec, "%.6e,%.6e,%.6e\n", wlLambda[n],
+                        SPEED_OF_LIGHT / wlLambda[n], wlTrans[n]);
+            }
+            fclose(fspec);
+            sprintf(str, "wlsweep : spectrum -> %s (%d points)", FN_spectrum, nwl);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+    }
 
     // 光活性化関数曲線 P_out(P_in) の CSV 出力
     // (小パワーで線形透過、大パワーで TPA 飽和 -> ReLU 相当の応答曲線)
@@ -1041,6 +1131,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     free(P->n_in);
     free(P->multiplier);
     free(P->b);
+    free(wlLambda);
+    free(wlTrans);
     free(n_mat);
     free(tpa_mat);
     if (E0 != NULL) free(E0);
