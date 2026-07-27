@@ -86,6 +86,10 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	        {rFeed != 0,               "rfeed"},
 	        {iABC == 1,                "abc = 1 (PML; BPM は独自の端部吸収体を使用)"},
 	        {PBCx || PBCy || PBCz,     "pbc"},
+	        // 非線形 TPA / パワー掃引は CPU 版 (obpm) のみ実装。CUDA 版では無視される
+	        // (サイレント無視を避けるため明示的に警告する)
+	        {NTpaB > 0,                "tpa (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
+	        {PowerSweep.npoints > 0,   "powersweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
 	    };
 	    for (size_t n = 0; n < sizeof(ignored) / sizeof(ignored[0]); n++) {
 	        if (ignored[n].cond) {
