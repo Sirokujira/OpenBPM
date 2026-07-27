@@ -77,6 +77,7 @@ int input_data(FILE *fp)
 	BPM.tiltx = BPM.tilty = 0;
 	BPM.frames = 0;   // 0 = スナップショット記録なし
 	BPM.launchMode = -1;  // -1 = ガウシアン励振 (既定)
+	BPM.launchNModes = 0; // 0 = ガウシアン励振
 
 	// 非線形吸収 (TPA) と入力パワー掃引 (省略時は従来動作 = 線形単発)
 	NTpaB = 0;
@@ -522,15 +523,45 @@ int input_data(FILE *fp)
 			BPM.frames = atoi(token[2]);
 		}
 		else if (!strcmp(strkey, "launch")) {
-			// launch = gauss | mode [<m>] : 励振方法 (既定 gauss)
-			// mode 指定時は先頭スライスの屈折率分布から導波モード #m を
-			// 虚軸伝搬法で求めて励振する (m 省略時は基本モード 0)
+			// launch = gauss | mode [<m>[:<coef>] ...] : 励振方法 (既定 gauss)
+			// mode 指定時は先頭スライスの屈折率分布から導波モードを虚軸伝搬法で
+			// 求めて励振する (m 省略時は基本モード 0)。複数指定すると重ね合わせ、
+			// <m>:<coef> で係数を与える (省略時 1)。入力電力は feed 電圧^2 に
+			// 正規化されるため、係数は分岐比のみを決める
 			if      (!strcmp(token[2], "mode")) {
-				BPM.launchMode = (ntoken > 3) ? atoi(token[3]) : 0;
-				if (BPM.launchMode < 0) BPM.launchMode = 0;
+				BPM.launchNModes = 0;
+				for (int n = 3; n < ntoken; n++) {
+					if (BPM.launchNModes >= BPM_MAX_LAUNCH_MODES) {
+						printf(errfmt2, strkey);
+						return 1;
+					}
+					// "<m>" または "<m>:<coef>"
+					char *sep = strchr(token[n], ':');
+					double coef = 1;
+					if (sep != NULL) {
+						*sep = '\0';
+						coef = atof(sep + 1);
+					}
+					const int idx = atoi(token[n]);
+					if ((idx < 0) || (coef == 0)) {
+						printf(errfmt2, strkey);
+						return 1;
+					}
+					BPM.launchIdx[BPM.launchNModes] = idx;
+					BPM.launchCoef[BPM.launchNModes] = coef;
+					BPM.launchNModes++;
+				}
+				if (BPM.launchNModes == 0) {
+					// 引数省略時は基本モード
+					BPM.launchIdx[0] = 0;
+					BPM.launchCoef[0] = 1;
+					BPM.launchNModes = 1;
+				}
+				BPM.launchMode = BPM.launchIdx[0];
 			}
 			else if (!strcmp(token[2], "gauss")) {
 				BPM.launchMode = -1;
+				BPM.launchNModes = 0;
 			}
 			else {
 				printf(errfmt2, strkey);

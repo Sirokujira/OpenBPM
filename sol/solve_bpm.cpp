@@ -261,7 +261,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         }
         int launched = 0;
         if (nmax > P->n_0) {
-            const int m = BPM.launchMode;
+            /* 重ね合わせる最大モード番号まで求める */
+            int m = 0;
+            for (int n = 0; n < BPM.launchNModes; n++) {
+                if (BPM.launchIdx[n] > m) m = BPM.launchIdx[n];
+            }
             wabpm_params Wm;
             Wm.Nx = Nx;
             Wm.Ny = Ny;
@@ -283,22 +287,52 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 // 位相ランプをモード界にも適用する (位相基準はビーム中心)
                 const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
                 const double kty = k0 * P->n_0 * sin(BPM.tilty * DTOR);
+                // モードの重ね合わせ s = sum_k coef_k * mode_{idx_k} を作り、
+                // L2 ノルムで正規化してから feed 電圧を掛ける。これにより
+                // モード数や係数に依らず入力電力は volt^2 に保たれる
+                // (係数は分岐比のみを決める)。
+                std::complex<double> *sup = new std::complex<double>[Nm];
+                for (long i = 0; i < Nm; i++) sup[i] = 0.0;
+                for (int n = 0; n < BPM.launchNModes; n++) {
+                    const std::complex<double> *src = &modes[(size_t)BPM.launchIdx[n] * Nm];
+                    const double c = BPM.launchCoef[n];
+                    for (long i = 0; i < Nm; i++) sup[i] += c * src[i];
+                }
+                double nrm2 = 0;
+                for (long i = 0; i < Nm; i++) nrm2 += std::norm(sup[i]);
+                const double scale = (nrm2 > 0) ? (volt / sqrt(nrm2)) : 0;
+
                 double power = 0;
                 for (long i = 0; i < Nm; i++) {
                     const long ix = i % Nx;
                     const long iy = i / Nx;
                     const double ph = -(ktx * (Xc[ix] - xc0)) - (kty * (Yc[iy] - yc0));
-                    const std::complex<double> em = volt * modes[(size_t)m * Nm + i]
+                    const std::complex<double> em = scale * sup[i]
                                                   * std::complex<double>(cos(ph), sin(ph));
                     floatcomplex e = {(float)em.real(), (float)em.imag()};
                     P->E1[i] = e;
                     power += std::norm(em);
                 }
+                delete[] sup;
                 P->precisePower = power;
-                mode_neff = neff[m];
-                sprintf(str, "launch : mode %d, neff = %.6f (found %d)", m, neff[m], nFound);
-                if (io) fprintf(fp, "%s\n", str);
-                fprintf(stdout, "%s\n", str);
+                mode_neff = neff[BPM.launchIdx[0]];   /* 代表値 : 先頭に指定したモード */
+                if (BPM.launchNModes == 1) {
+                    sprintf(str, "launch : mode %d, neff = %.6f (found %d)",
+                            BPM.launchIdx[0], neff[BPM.launchIdx[0]], nFound);
+                    if (io) fprintf(fp, "%s\n", str);
+                    fprintf(stdout, "%s\n", str);
+                }
+                else {
+                    int len = sprintf(str, "launch : superposition of %d modes (found %d) :",
+                                      BPM.launchNModes, nFound);
+                    for (int n = 0; n < BPM.launchNModes; n++) {
+                        len += sprintf(str + len, " %d(c=%g, neff=%.6f)",
+                                       BPM.launchIdx[n], BPM.launchCoef[n],
+                                       neff[BPM.launchIdx[n]]);
+                    }
+                    if (io) fprintf(fp, "%s\n", str);
+                    fprintf(stdout, "%s\n", str);
+                }
                 if ((BPM.tiltx != 0) || (BPM.tilty != 0)) {
                     sprintf(str, "launch : beamtilt (%.3f, %.3f) [deg] applied to the mode field",
                             BPM.tiltx, BPM.tilty);
