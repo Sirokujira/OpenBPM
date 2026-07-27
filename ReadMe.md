@@ -131,6 +131,8 @@ ctest --test-dir build --output-on-failure
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
 | `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
 | `launch` | `launch = <gauss\|mode [m]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モード #m (省略時 0 = 基本モード) を虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (振幅は `feed` 電圧、入力電力 = volt^2)。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
+| `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
+| `powersweep` | `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log\|lin]` | 入力パワー掃引 (既定 lin)。`activation_curve.csv` に P_out(P_in) を出力。省略時は従来の単発計算 |
 
 - `polarization` / `wideangle` 指定時は倍精度の一般化伝搬エンジンを使用します
   (CPU 版 `bpm/wabpm.cpp` / CUDA 版 `bpm/wabpm.cu`、同一アルゴリズム)。
@@ -139,10 +141,46 @@ ctest --test-dir build --output-on-failure
 - `feed` の電圧はビーム振幅として使用されます。
 - メッシュは等間隔を推奨します (不均一の場合は平均セル幅で計算し警告を表示)。
 
+### ONN 光活性化関数 (非線形吸収 TPA + パワー掃引)
+
+光ニューラルネットワーク (ONN) の光活性化関数を BPM で軽量に設計反復するための
+機能です。メタマテリアル装荷 Si 導波路の二光子吸収 (TPA) による P_out(P_in) の
+飽和特性 (ReLU 相当) を対象としています。
+
+出典: K. Honda, Y. Shoji, T. Amemiya, Opt. Lett. 49, 5811 (2024)
+(TPA 係数 beta = 424 cm/GW、P_out(P_in) の飽和特性で ReLU 相当の活性化関数)
+
+- `tpa = <material id> <beta[cm/GW]>` を指定すると、その材料のセルで各伝搬
+  ステップに `E *= exp(-(beta/2)*I*dz)` の非線形減衰を適用します
+  (強度の減衰率 alpha = beta*I に対し界は alpha/2。
+  単位変換は 1 cm/GW = 1e-11 m/W、例: 424 cm/GW = 4.24e-9 m/W)。
+- `tpa` / `powersweep` 指定時は初期界を `∫∫|E|^2 dA = P_in [W]` に正規化し、
+  `|E|^2` がそのまま強度 I [W/m^2] になります (物理スケーリング)。
+  未指定時は従来通り無次元の界で計算します (後方互換)。
+- `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log|lin]` で入力パワーを掃引し、
+  各点の出力パワー `P_out = ∫∫|E_end|^2 dA` を **activation_curve.csv**
+  (列: `P_in_W, P_out_W, transmission`) に出力します。obpm.log には
+  `ONN: P_in=... W -> P_out=... W (T=...)` の行が残ります。
+  `powersweep` 省略で `tpa` のみの場合は P_in = 1 W の単発計算になります。
+- 実効断面積 `A_eff = (∫|E|^2 dA)^2 / ∫|E|^4 dA` を初期界から実計算して
+  obpm.log に出力します。一様断面の直線導波路では平面波近似の解析解
+  `T(P_in) = 1 / (1 + beta*(P_in/A_eff)*L)` と比較できます。
+- サンプル: `data/sample/onn_activation.ofd` (fiber.ofd ベースの直線導波路 +
+  `tpa = 3 424` + log 掃引 8 点)。全掃引点で上記解析解と ±7% 以内で一致し
+  (最大 +4.1% @ 最深飽和点)、小パワーで線形透過 (T = 0.98)、大パワーで飽和
+  (T = 0.30) の単調非増加曲線になります。深い飽和 (beta*P*L/A_eff > 3 程度)
+  では TPA がモード中心を選択的に焼いて界形状が平坦化するため、固定 A_eff の
+  解析解との差が拡大します (平面波近似の限界)。
+- `/field` 出力 (Ixz/Efinal/frames) は最終掃引点 (最大パワー) の結果です。
+- `wideangle` / `polarization` の一般化伝搬エンジンとも併用できます。
+  CUDA 版 (`obpm_cuda`) は現状 `tpa` / `powersweep` に未対応です (無視されます)。
+
 ## CI / Release
 
 - push / PR ごとに Linux (gcc) と macOS (AppleClang + Homebrew libomp/Eigen)
   で CPU ビルド + `data/sample/fiber.ofd` のスモーク実行 (`normal end` 判定)
+- `data/sample/onn_activation.ofd` の ONN 活性化関数スモーク
+  (`activation_curve.csv` の生成 + 透過率の単調飽和判定) を 3 OS で実行
 - ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64`) に保存
 - `v*` タグを push すると GitHub Release にバイナリが自動添付されます
 

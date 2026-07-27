@@ -1,9 +1,11 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
       "Bash(cmake:*)",
       "Bash(ctest:*)",
       "Bash(make:*)",
+      "Bash(ninja:*)",
       "Bash(bin/obpm:*)",
       "Bash(bin/obpm_post:*)",
       "Bash(bin/obpm_cuda:*)",
@@ -18,10 +20,16 @@
       "Bash(git branch:*)",
       "Bash(git show:*)",
       "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
       "Bash(h5dump:*)"
     ],
-    "deny": []
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ]
   },
+  "includeCoAuthoredBy": true,
   "hooks": {
     "SessionStart": [
       {

@@ -6,6 +6,9 @@
 #include "hdf5.h"
 #define FILE_NAME "time_series_data.h5"
 
+// 光活性化関数曲線 (powersweep 指定時に出力)
+#define FN_activation "activation_curve.csv"
+
 #include "bpm/bpm_prototype.h"
 #include "bpm/ElectricFieldProfile.hpp"
 #include "bpm/RefractiveIndexProfile.hpp"
@@ -111,6 +114,20 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             n_mat[m] = v;
         }
     }
+
+    // 材料毎の二光子吸収 (TPA) 係数テーブル [m/W]
+    // 入力 (tpa = <material id> <beta[cm/GW]>) から単位変換して格納する
+    //   1 cm/GW = 1e-2 m / 1e9 W = 1e-11 m/W (例 : 424 cm/GW = 4.24e-9 m/W)
+    // 出典 : Honda, Shoji, Amemiya, Opt. Lett. 49, 5811 (2024)
+    //        (メタマテリアル装荷 Si 導波路の TPA による光活性化関数)
+    double *tpa_mat = (double *)malloc(NMaterial * sizeof(double));
+    for (int64_t m = 0; m < NMaterial; m++) {
+        tpa_mat[m] = 0;
+    }
+    for (int n = 0; n < NTpaB; n++) {
+        tpa_mat[TpaB[n].m] = TpaB[n].beta * 1e-11;
+    }
+    const int haveTpa = (NTpaB > 0);
 
     // BPM パラメータ (BPM-MATLAB の FDBPM に対応)
     struct parameters P_var;
@@ -286,6 +303,69 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         delete[] n2m;
     }
 
+    // ============================================================
+    // 非線形吸収 (TPA) / 入力パワー掃引 (ONN 光活性化関数) の準備
+    //   - 物理スケーリング : 初期界を ∫∫|E|^2 dA = P_in [W] になるよう正規化し、
+    //     |E|^2 がそのまま強度 I [W/m^2] になるようにする (面積要素 dA = Dx*Dy)。
+    //     tpa / powersweep 未指定時は従来通り無次元の界のまま計算する (後方互換)。
+    //   - 実効断面積 A_eff = (∫|E|^2 dA)^2 / ∫|E|^4 dA を初期界から実計算する
+    //     (平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) との比較用)
+    // ============================================================
+    const int    sweep    = (PowerSweep.npoints > 0);
+    const int    nsweep   = sweep ? PowerSweep.npoints : 1;
+    const int    physcale = (sweep || haveTpa);   // 物理スケーリングの有無
+    const double E0rawpow = P->precisePower;      // 初期界の生の |E|^2 和 (面積要素なし)
+    floatcomplex *E0 = NULL;                      // 初期界の保存 (掃引毎の再初期化用)
+    double *sweepPin = NULL, *sweepPout = NULL;
+    if (physcale) {
+        E0 = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex));
+        memcpy(E0, P->E1, (P->Nx * P->Ny) * sizeof(floatcomplex));
+        sweepPin  = (double *)malloc(nsweep * sizeof(double));
+        sweepPout = (double *)malloc(nsweep * sizeof(double));
+        for (int n = 0; n < nsweep; n++) {
+            if (!sweep) {
+                sweepPin[n] = 1;  // tpa のみ指定時の既定入力パワー [W]
+            }
+            else if (nsweep == 1) {
+                sweepPin[n] = PowerSweep.pmin;
+            }
+            else if (PowerSweep.logscale) {
+                sweepPin[n] = PowerSweep.pmin *
+                    pow(PowerSweep.pmax / PowerSweep.pmin, (double)n / (nsweep - 1));
+            }
+            else {
+                sweepPin[n] = PowerSweep.pmin +
+                    ((PowerSweep.pmax - PowerSweep.pmin) * n) / (nsweep - 1);
+            }
+            sweepPout[n] = 0;
+        }
+        // 実効断面積 (初期界から実計算。ガウシアンでは A_eff = pi*w0^2 に一致)
+        double sumI2 = 0;
+        for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+            const floatcomplex e = E0[i];
+            const double i2 = ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+            sumI2 += i2 * i2;
+        }
+        const double Aeff = (sumI2 > 0) ? (E0rawpow * E0rawpow / sumI2) * (Dx * Dy) : 0;
+        sprintf(str, "ONN: A_eff = %.6e [m^2] (from input field), L = %.6e [m]",
+                Aeff, Zn[Nz] - Zn[0]);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
+    if (haveTpa) {
+        for (int n = 0; n < NTpaB; n++) {
+            sprintf(str, "ONN: TPA material id = %d, beta = %g [cm/GW] = %g [m/W]",
+                    (int)TpaB[n].m, TpaB[n].beta, tpa_mat[TpaB[n].m]);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+        if (!sweep) {
+            sprintf(str, "ONN: no powersweep -> single run with P_in = %g [W]", sweepPin[0]);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+    }
+
     P->EfieldPower = 0;
     P->precisePowerDiff = 0;
     #ifdef _OPENMP
@@ -334,6 +414,30 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
 
     // HDF5ファイルの作成
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+
+    // ============================================================
+    // 入力パワー掃引ループ (powersweep 未指定時は 1 回のみ実行)
+    // 各回 : 初期界を P_in [W] に正規化 -> z 伝搬 -> P_out を記録する。
+    // /field 出力 (Ixz/Efinal/frames) は最終掃引点の結果になる。
+    // ============================================================
+    for (int isweep = 0; isweep < nsweep; isweep++) {
+
+    // 物理スケーリング時 : 初期界を ∫∫|E|^2 dA = P_in になるよう再設定する
+    // (掃引 2 回目以降のポインタ・電力簿記のリセットを兼ねる)
+    if (physcale) {
+        const double Pin = sweepPin[isweep];
+        const float s = (float)sqrt(Pin / (E0rawpow * Dx * Dy));
+        P->E1 = E_in;
+        P->E2 = E_buf;
+        for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+            P->E1[i] = E0[i] * s;
+        }
+        P->precisePower = E0rawpow * (double)s * s;
+        P->EfieldPower = 0;
+        P->precisePowerDiff = 0;
+        sprintf(str, "sweep %d / %d : P_in = %g [W]", isweep + 1, nsweep, Pin);
+        fprintf(stdout, "%s\n", str);
+    }
 
     if (BPM.pol || BPM.wideangle) {
         // ============================================================
@@ -404,6 +508,22 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 Ed[i] *= P->multiplier[i];
             }
 
+            // TPA (二光子吸収) : E *= exp(-(beta/2)*I*dz), I = |E|^2 [W/m^2]
+            // (物理スケーリング済みの界を仮定。強度の減衰率 alpha = beta*I に対し
+            //  界には alpha/2 を適用する)
+            if (haveTpa) {
+                for (int iy = 0; iy < P->Ny; iy++) {
+                    for (int ix = 0; ix < P->Nx; ix++) {
+                        const long index = (long)(P->Nx * iy) + ix;
+                        const double beta = tpa_mat[iEx[NA(ix, iy, iz)]];
+                        if (beta > 0) {
+                            const double i2 = std::norm(Ed[index]);
+                            Ed[index] *= exp(-0.5 * beta * i2 * Dz);
+                        }
+                    }
+                }
+            }
+
             // 中心行の強度を記録
             {
                 const long row0 = (long)(P->Ny / 2) * P->Nx;
@@ -471,6 +591,34 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             applyMultiplier(P, iz, NULL);
         }
 
+        // TPA (二光子吸収) : E *= exp(-(beta/2)*I*dz), I = |E|^2 [W/m^2]
+        // (物理スケーリング済みの界を仮定。強度の減衰率 alpha = beta*I に対し
+        //  界には alpha/2 を適用する)
+        // 次ステップの fieldCorrection (= sqrt(precisePower/EfieldPower)) が
+        // TPA 減衰を打ち消さないよう、電力簿記 precisePower も同率で減らす。
+        if (haveTpa) {
+            updatePrecisePower(P);  // 係留中の precisePowerDiff を先に確定する
+            double pb = 0, pa = 0;
+            for (int iy = 0; iy < P->Ny; iy++) {
+                for (int ix = 0; ix < P->Nx; ix++) {
+                    const long index = (long)(P->Nx * iy) + ix;
+                    const floatcomplex e = P->E2[index];
+                    const double i2 = ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+                    const double beta = tpa_mat[iEx[NA(ix, iy, iz)]];
+                    pb += i2;
+                    if (beta > 0) {
+                        const float g = (float)exp(-0.5 * beta * i2 * Dz);
+                        P->E2[index] = e * g;
+                        pa += i2 * (double)g * g;
+                    }
+                    else {
+                        pa += i2;
+                    }
+                }
+            }
+            if (pb > 0) P->precisePower *= pa / pb;
+        }
+
         // 中心行の強度を記録 (このステップの結果は E2 にある)
         {
             const long row0 = (long)(P->Ny / 2) * P->Nx;
@@ -490,7 +638,16 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             }
         }
 
-        if(iz+1 < P->iz_end) swapEPointers(P,iz);
+        // E1/E2 の入替え : swapEPointers はステップ数が奇数のとき新規バッファを
+        // malloc するため、パワー掃引の複数回実行ではバッファが増えないよう
+        // 単純スワップに置き換える (最終結果はループ後に Efinal へコピーされる。
+        // 演算内容は同一で、単発実行の結果も変わらない)
+        if (iz + 1 < P->iz_end) {
+            P->EfieldPower = 0;
+            floatcomplex *etmp = P->E1;
+            P->E1 = P->E2;
+            P->E2 = etmp;
+        }
         updatePrecisePower(P);
 
         *tdft += cputime() - t0;
@@ -500,6 +657,43 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     if (P->E2 != P->Efinal) {
         memcpy(P->Efinal, P->E2, P->Nx * P->Ny * sizeof(floatcomplex));
     }
+    }
+
+    // 物理スケーリング時 : 出力パワー P_out = ∫∫|E_end|^2 dA [W] を記録する
+    if (physcale) {
+        double rawpow = 0;
+        for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+            const floatcomplex e = P->Efinal[i];
+            rawpow += ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+        }
+        sweepPout[isweep] = rawpow * Dx * Dy;
+        sprintf(str, "ONN: P_in=%g W -> P_out=%g W (T=%g)",
+                sweepPin[isweep], sweepPout[isweep],
+                (sweepPin[isweep] > 0) ? (sweepPout[isweep] / sweepPin[isweep]) : 0);
+        if (io) {
+            fprintf(fp, "%s\n", str);
+            fflush(fp);
+        }
+        fprintf(stdout, "%s\n", str);
+    }
+
+    }  // 掃引ループ (isweep) 終了
+
+    // 光活性化関数曲線 P_out(P_in) の CSV 出力
+    // (小パワーで線形透過、大パワーで TPA 飽和 -> ReLU 相当の応答曲線)
+    if (sweep) {
+        FILE *fcsv = fopen(FN_activation, "w");
+        if (fcsv != NULL) {
+            fprintf(fcsv, "P_in_W,P_out_W,transmission\n");
+            for (int n = 0; n < nsweep; n++) {
+                fprintf(fcsv, "%.6e,%.6e,%.6e\n", sweepPin[n], sweepPout[n],
+                        (sweepPin[n] > 0) ? (sweepPout[n] / sweepPin[n]) : 0);
+            }
+            fclose(fcsv);
+            sprintf(str, "ONN: activation curve -> %s (%d points)", FN_activation, nsweep);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
     }
 
     // result
@@ -797,6 +991,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     free(P->multiplier);
     free(P->b);
     free(n_mat);
+    free(tpa_mat);
+    if (E0 != NULL) free(E0);
+    if (sweepPin != NULL) free(sweepPin);
+    if (sweepPout != NULL) free(sweepPout);
     free(Ixz);
     if (Frames) free(Frames);
 

@@ -78,6 +78,13 @@ int input_data(FILE *fp)
 	BPM.frames = 0;   // 0 = スナップショット記録なし
 	BPM.launchMode = -1;  // -1 = ガウシアン励振 (既定)
 
+	// 非線形吸収 (TPA) と入力パワー掃引 (省略時は従来動作 = 線形単発)
+	NTpaB = 0;
+	TpaB = NULL;
+	PowerSweep.npoints = 0;   // 0 = 掃引なし
+	PowerSweep.pmin = PowerSweep.pmax = 0;
+	PowerSweep.logscale = 0;
+
 	NFreq1 =
 	NFreq2 = 0;
 
@@ -530,6 +537,48 @@ int input_data(FILE *fp)
 				return 1;
 			}
 		}
+		else if (!strcmp(strkey, "tpa")) {
+			// tpa = <material id> <beta[cm/GW]> : 二光子吸収 (TPA) 係数
+			// (メタマテリアル装荷 Si 導波路の実測例 : beta = 424 cm/GW,
+			//  Honda, Shoji, Amemiya, Opt. Lett. 49, 5811 (2024))
+			if (ntoken < 4) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+			TpaB = (tpab_t *)realloc(TpaB, (NTpaB + 1) * sizeof(tpab_t));
+			TpaB[NTpaB].m    = (id_t)atoi(token[2]);
+			TpaB[NTpaB].beta = atof(token[3]);
+			if (TpaB[NTpaB].beta <= 0) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+			NTpaB++;
+		}
+		else if (!strcmp(strkey, "powersweep")) {
+			// powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log|lin] : 入力パワー掃引
+			// (光活性化関数曲線 P_out(P_in) の抽出用。省略時は従来の単発計算)
+			if (ntoken < 5) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+			PowerSweep.pmin    = atof(token[2]);
+			PowerSweep.pmax    = atof(token[3]);
+			PowerSweep.npoints = atoi(token[4]);
+			PowerSweep.logscale = 0;  // 既定 lin
+			if (ntoken > 5) {
+				if      (!strcmp(token[5], "log")) PowerSweep.logscale = 1;
+				else if (!strcmp(token[5], "lin")) PowerSweep.logscale = 0;
+				else {
+					printf(errfmt2, strkey);
+					return 1;
+				}
+			}
+			if ((PowerSweep.pmin <= 0) || (PowerSweep.pmax < PowerSweep.pmin) ||
+			    (PowerSweep.npoints < 1)) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+		}
 	}
 /*
 	// debug
@@ -594,6 +643,12 @@ int input_data(FILE *fp)
 	for (int64_t n = 0; n < NGeometry; n++) {
 		if (Geometry[n].m >= NMaterial) {
 			printf("*** invalid material id of geometry data #%zd\n", n + 1);
+			return 1;
+		}
+	}
+	for (int n = 0; n < NTpaB; n++) {
+		if (TpaB[n].m >= NMaterial) {
+			printf("*** invalid material id of tpa data #%d\n", n + 1);
 			return 1;
 		}
 	}
