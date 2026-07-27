@@ -186,11 +186,20 @@ ctest --test-dir build --output-on-failure
 
 ## CI / Release
 
-- push / PR ごとに Linux (gcc) と macOS (AppleClang + Homebrew libomp/Eigen)
-  で CPU ビルド + `data/sample/fiber.ofd` のスモーク実行 (`normal end` 判定)
-- `data/sample/onn_activation.ofd` の ONN 活性化関数スモーク
-  (`activation_curve.csv` の生成 + 透過率の単調飽和判定) を 3 OS で実行
-- ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64`) に保存
+push / PR ごとに以下のジョブを実行します。
+
+| ジョブ | 内容 |
+|---|---|
+| `build-cpu` (Linux/gcc) | CPU ビルド + `ctest` + `fiber.ofd` スモーク + `data/` 全サンプルスモーク + ONN 活性化関数の定量検証 |
+| `build-macos` (AppleClang + Homebrew libomp/Eigen) | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
+| `build-windows` (MSVC + Ninja + vcpkg) | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
+| `build-cuda` | CUDA Toolkit を導入し `obpm_cuda` のコンパイル・リンクを検証 (ランナーに GPU は無いため実行はしない) |
+| `build-mpi` | MPI + 並列 HDF5 を導入し `obpm_mpi` (FDTD ソルバー) のビルドを検証 |
+
+- ONN 活性化関数の検証は 3 OS とも `tests/check_activation.py` (解析解との
+  相対 7% 比較) を使用します
+- ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64` /
+  `obpm-windows-x64`) に保存
 - `v*` タグを push すると GitHub Release にバイナリが自動添付されます
 
 ## 姉妹リポジトリ

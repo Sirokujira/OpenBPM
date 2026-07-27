@@ -117,7 +117,7 @@ jobs:
       - name: Configure (CPU only)
         run: |
           OMP="$(brew --prefix libomp)"
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF \
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
             -DOpenMP_C_LIB_NAMES=omp \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
@@ -126,6 +126,9 @@ jobs:
 
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Unit tests (解析解との比較検証)
+        run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
         run: |
@@ -202,12 +205,15 @@ jobs:
       - name: Configure (CPU only)
         run: >
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DWITH_CUDA=OFF -DWITH_MPI=OFF
+          -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
           "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
 
       - name: Build obpm / obpm_post
         run: cmake --build build
+
+      - name: Unit tests (解析解との比較検証)
+        run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
         run: |
@@ -288,3 +294,23 @@ jobs:
 
       - name: Build obpm_cuda (compile/link only)
         run: cmake --build build_cuda --target obpm_cuda -j"$(nproc)"
+
+  # MPI 版 (obpm_mpi = OpenFDTD 由来の FDTD ソルバー) のビルド検証。
+  # mpi/solve.c は並列 HDF5 (H5Pset_fapl_mpio 等) を使うため libhdf5-openmpi-dev が必要。
+  build-mpi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (MPI + parallel HDF5)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc g++ libeigen3-dev \
+            libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
+
+      - name: Configure (MPI)
+        run: cmake -B build_mpi -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=ON
+
+      - name: Build obpm_mpi
+        run: cmake --build build_mpi --target obpm_mpi -j"$(nproc)"
