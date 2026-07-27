@@ -19,7 +19,8 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 > ℹ **既知事項**:
 > - `obpm_post` は OpenFDTD 由来の FDTD 量の描画 (obpm.out ベース) に加え、
 >   BPM が `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`)・
->   最終電界 (`Efinal_*`) の可視化にも対応しています (`post/postbpm.c`)。
+>   最終電界 (`Efinal_*`)・伝搬スナップショット (`frames`、等間隔に最大 6 枚) の
+>   可視化にも対応しています (`post/postbpm.c`)。
 >   HDF5 を Python (h5py) で直接読む・GUI (OpenFDTD-X) の H5 ビューアで
 >   参照することも可能です。
 > - obpm.out (FDTD 形式、BPM ではほぼゼロの大容量バイナリ) が不要な場合は
