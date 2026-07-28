@@ -2,7 +2,7 @@
 
 OpenFDTD のコード構造を土台にしたビーム伝搬法 (BPM) 光導波路ソルバー (C/C++)。
 伝搬カーネルは BPM-MATLAB の FDBPM (Douglas-Gunn ADI) 移植 + 独自拡張
-(広角 Pade(1,1) / 半ベクトル / モードソルバ / TPA 非線形)。
+(広角 Pade(1,1) / 半ベクトル / モードソルバ / TPA 非線形 / 波長掃引)。
 OpenFDTD-X (GUI) から QProcess で起動される処理カーネルでもある。
 
 ## ビルド・テスト (まずこれが通ることを確認)
@@ -11,7 +11,7 @@ OpenFDTD-X (GUI) から QProcess で起動される処理カーネルでもあ�
 # 依存: cmake, gcc/g++, libhdf5-dev, libeigen3-dev (+ OpenMP)
 cmake -S . -B build -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # 解析解との比較検証 (3本)
+ctest --test-dir build --output-on-failure   # 解析解との比較検証 (9本、要 h5py/numpy)
 ```
 
 ```sh

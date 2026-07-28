@@ -79,6 +79,7 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
 解析解と比較する単体テストを `tests/` に用意しています。
 
 ```sh
+pip install h5py numpy   # 結合テスト (mode_beat / wlsweep) が HDF5 を読むため
 cmake -S . -B build -DWITH_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -90,6 +91,8 @@ ctest --test-dir build --output-on-failure
 | `test_modes` | ステップインデックスファイバ LP01/LP11 の実効屈折率 (分散方程式の厳密解と比較)、モード直交性 |
 | `test_allset` | `findModes` / `modeSuperposition` / `offsetField` / `tiltField` (P_Struct API) |
 | `test_fdbpm` | スカラー近軸カーネル (既定経路, `bpm/FDBPMpropagator.c`) の自由空間回折 `w(z)`、エネルギー保存、一様吸収 `exp(-2*k0*n''*z)`、ビーム中心保持 |
+| `mode_beat_solver` / `_check` | 多モード重ね合わせ励振の結合テスト。`data/fiber_mode_superposition.ofd` を実行し、伝搬マップの重心軌跡から求めたモードビート長を理論値 `lambda/\|neff0-neff1\|` と比較 (実測 5710um / 理論 5762um, 誤差 0.9%)。電力保存も検査 (`tests/check_modes_beat.py`) |
+| `wlsweep_check` | 波長掃引の結合テスト。`data/spectrum_sweep.ofd` の掃引結果が、最終波長を単独指定した実行と**完全一致**することを確認 (波長ごとの再設定に取りこぼしが無いことの検証)。`spectrum.csv` の点数・`lambda*f = c` も検査 (`tests/check_wlsweep.py`) |
 | `onn_activation_solver` / `_check` | ONN 光活性化関数の結合テスト。`data/sample/onn_activation.ofd` を実行し、`activation_curve.csv` を解析解 `T = 1/(1 + beta*(P_in/A_eff)*L)` と比較 (相対 7% 以内)。単調非増加・飽和・`P_out <= P_in` も検査 (`tests/check_activation.py`、CI の 3 OS でも同一スクリプトを使用) |
 
 ## 実行

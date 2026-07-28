@@ -525,6 +525,32 @@ if (WITH_TESTS)
         # ソルバー実行 -> 検証 の順序を保証する
         set_tests_properties(onn_activation_solver PROPERTIES FIXTURES_SETUP onn_run)
         set_tests_properties(onn_activation_check  PROPERTIES FIXTURES_REQUIRED onn_run)
+
+        # 多モード重ね合わせ励振 (launch = mode 0 1) : モードビート長を
+        # 理論値 lambda/|neff0-neff1| と比較する
+        set(BEAT_TEST_DIR "${CMAKE_BINARY_DIR}/beat_test")
+        file(MAKE_DIRECTORY "${BEAT_TEST_DIR}")
+        add_test(NAME mode_beat_solver
+                 COMMAND $<TARGET_FILE:obpm> -n 2 -no-fdtd-out
+                         "${CMAKE_SOURCE_DIR}/data/fiber_mode_superposition.ofd"
+                 WORKING_DIRECTORY "${BEAT_TEST_DIR}")
+        add_test(NAME mode_beat_check
+                 COMMAND ${Python3_EXECUTABLE}
+                         "${CMAKE_SOURCE_DIR}/tests/check_modes_beat.py"
+                         --h5 "${BEAT_TEST_DIR}/time_series_data.h5"
+                         --log "${BEAT_TEST_DIR}/obpm.log"
+                 WORKING_DIRECTORY "${BEAT_TEST_DIR}")
+        set_tests_properties(mode_beat_solver PROPERTIES FIXTURES_SETUP beat_run)
+        set_tests_properties(mode_beat_check  PROPERTIES FIXTURES_REQUIRED beat_run)
+
+        # 波長掃引 (wlsweep) : 掃引結果が単独実行と厳密に一致することを確認する
+        # (スクリプト内でソルバーを 2 回実行する)
+        add_test(NAME wlsweep_check
+                 COMMAND ${Python3_EXECUTABLE}
+                         "${CMAKE_SOURCE_DIR}/tests/check_wlsweep.py"
+                         --bin $<TARGET_FILE:obpm>
+                         --ofd "${CMAKE_SOURCE_DIR}/data/spectrum_sweep.ofd"
+                         --workdir "${CMAKE_BINARY_DIR}/wlsweep_test")
     endif()
 endif()
 

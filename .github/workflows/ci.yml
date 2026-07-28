@@ -29,6 +29,10 @@ jobs:
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(nproc)"
 
+      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う
+      - name: Install test dependencies
+        run: python3 -m pip install --upgrade h5py numpy
+
       - name: Unit tests (解析解との比較検証)
         run: ctest --test-dir build --output-on-failure
 
@@ -127,6 +131,10 @@ jobs:
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
 
+      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う
+      - name: Install test dependencies
+        run: python3 -m pip install --upgrade h5py numpy
+
       - name: Unit tests (解析解との比較検証)
         run: ctest --test-dir build --output-on-failure
 
@@ -211,6 +219,10 @@ jobs:
 
       - name: Build obpm / obpm_post
         run: cmake --build build
+
+      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う
+      - name: Install test dependencies
+        run: python -m pip install --upgrade h5py numpy
 
       - name: Unit tests (解析解との比較検証)
         run: ctest --test-dir build --output-on-failure

@@ -99,8 +99,9 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	            fprintf(stdout, "%s\n", str);
 	        }
 	    }
-	    // 波長掃引は未対応 (先頭周波数のみ使用)
-	    if ((NFreq2 > 1) || ((NFreq2 == 0) && (NFreq1 > 1))) {
+	    // CUDA 版は波長掃引に未対応 (先頭周波数のみ使用)。
+	    // wlsweep 指定時は上の一覧で専用の warning を出しているため二重に出さない。
+	    if (!BPM.wlsweep && ((NFreq2 > 1) || ((NFreq2 == 0) && (NFreq1 > 1)))) {
 	        sprintf(str, "*** warning : multiple frequencies are not swept by the BPM solver (only the first is used).");
 	        if (io) fprintf(fp, "%s\n", str);
 	        fprintf(stdout, "%s\n", str);
