@@ -58,9 +58,20 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
 ## モード解析
 
 虚軸伝搬法 (imaginary-distance BPM) + Gram-Schmidt 直交化によるモードソルバを
-`bpm/modes.cpp` (`wabpm_find_modes`) に実装しています。実効屈折率の降順に導波モードを
-求め、neff は Rayleigh 商から算出します。`include/bpm/allset.hpp` の `findModes()`
-(BPM-MATLAB 互換 API) はこのソルバを使用します。
+`bpm/modes.cpp` (`wabpm_find_modes`) に実装しています。実効屈折率の降順に導波モード
+(n_clad < neff を満たすもののみ) を求め、neff は Rayleigh 商から算出します。
+
+- 入力キーワード **`modes = <nModes> [excite]`** で `obpm` / `obpm_cuda` から実行できます
+  (CUDA 版もホスト側で同一の解析を実行)。結果は obpm.log (`mode <i> : neff = ...`) と
+  HDF5 (`/modes/mode<i>` : Ny×Nx 実数場、`/modes/neff`) に出力されます。
+  解析は入力断面 (z 始端) の屈折率分布に対して行い、曲げ (bend) は反映しません。
+  半ベクトルの直交化は近似となるためスカラー演算子で解析します。
+- `excite` を付けると入射ビームがガウシアンではなく数値的に厳密な基本モードに
+  置き換わります (モード整合励振)。サンプル `data/sample/fiber_modes.ofd` では
+  LP01 の neff = 1.447167 が分散方程式の厳密解と一致し、電力保存が
+  T = 0.99999 (ガウシアン励振では 0.99988) に向上します。
+- `include/bpm/allset.hpp` の `findModes()` (BPM-MATLAB 互換 API) も同じソルバを
+  使用します。
 
 ## テスト
 
@@ -123,6 +134,7 @@ ctest --test-dir build --output-on-failure
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
 | `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
+| `modes` | `modes = <nModes> [excite]` | 入力断面のモード解析 (虚軸伝搬法)。導波条件 (n_clad < neff) を満たすモードを neff 降順に求め、`/modes/mode<i>` と `/modes/neff` に出力。`excite` 指定で入射ビームを基本モードに置き換え (モード整合励振)。省略時は解析なし |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
 | `powersweep` | `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log\|lin]` | 入力パワー掃引 (既定 lin)。`activation_curve.csv` に P_out(P_in) を出力。省略時は従来の単発計算 |
 

@@ -96,12 +96,19 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 
 		double neff_prev = 0.0;
 		int converged = 0;
+		int unguided = 0;
 		for (int it = 0; it < maxIter; it++) {
 			wabpm_imagdist_step(W, E, n2);
 			deflate(E, modes, m, N);
 			if (normalize(E, N) == 0.0) break;   // 部分空間が尽きた
 
 			const double ne = rayleigh_neff(W, E, n2, work);
+			// 十分反復しても neff <= n0 のままなら残りは非導波 (放射) 状態 :
+			// これ以上のモードは存在しないため打ち切る
+			if (it >= 200 && ne <= W->n0) {
+				unguided = 1;
+				break;
+			}
 			if (it > 0 && std::fabs(ne - neff_prev) < tol) {
 				neff_prev = ne;
 				converged = 1;
@@ -109,7 +116,8 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 			}
 			neff_prev = ne;
 		}
-		if (!converged) break;
+		// 導波条件 (n0 < neff) を満たすモードのみ採用する
+		if (!converged || unguided || neff_prev <= W->n0) break;
 
 		std::memcpy(&modes[(size_t)m * N], E, (size_t)N * sizeof(cplx));
 		neff[m] = neff_prev;

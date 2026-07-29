@@ -140,15 +140,21 @@ CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する
 
 ## 中優先度
 
-- [ ] **モードソルバがソルバ入力から利用できない (ライブラリのみ)**
-  - 場所: `bpm/modes.cpp` (`wabpm_find_modes`) / `sol/input_data.c` / `sol/solve_bpm.cpp`
-  - 現状: モードソルバは実装・テスト済みだが、`obpm` の入力キーワードから実行する
-    経路がなく、C++ API (`wabpm_find_modes` / `allset.hpp` の `findModes`) 経由でしか
-    使えない。
-  - 対応案: 入力キーワード (例: `modes = <nModes>`) を追加し、
-    (1) 求めたモードと neff を HDF5 (`/modes/...`) に出力、
-    (2) オプションで入射ビームを基本モードで初期化 (`beam = mode` 等) して
-    LP01 整合励振 (現状は Marcuse 近似の w0 手動指定) を可能にする。
+- [x] **モードソルバがソルバ入力から利用できない (ライブラリのみ)** ✅ 対応済み
+  - 場所: `bpm/modes.cpp` / `sol/input_data.c` / `sol/solve_bpm.cpp` / `cuda/solve_bpm.cu`
+  - 対応内容: 入力キーワード `modes = <nModes> [excite]` を追加 (3 点セット +
+    CUDA パリティ)。入力断面のモードを虚軸伝搬法で解析し、neff を obpm.log、
+    モード形状を HDF5 `/modes/mode<i>` + `/modes/neff` に出力。`excite` 指定で
+    入射ビームを基本モードに置き換える (モード整合励振、beamtilt 位相ランプは維持)。
+    CUDA 版もホスト側で同一処理 (bpm/modes.cpp + wabpm.cpp を obpm_cuda にリンク)。
+    あわせて `wabpm_find_modes` に導波条件フィルタ (n0 < neff、非導波状態の早期打切)
+    を追加し、シングルモードファイバで `modes = 3` 指定時の無意味な解と
+    無駄な反復 (25 秒 → 2.6 秒) を解消。
+  - 検証: `data/sample/fiber_modes.ofd` (新規) で LP01 neff = 1.4471672 が
+    分散方程式の厳密解 1.447167 と一致 (誤差 2e-7)。モード整合励振で電力保存
+    T = 0.99999 (ガウシアン 0.99988)。既存回帰 (fiber output power = 3.122518e+02、
+    ctest 3 スイート) は不変。CI スモーク (Linux/macOS, neff ±5e-4 判定) を追加。
+    CUDA 12.0 コンパイル検証済み (実機実行は GPU 待ち)。
 
 - [ ] **テーパ / ツイスト機能が未公開 (カーネルは対応済み)**
   - 場所: `bpm/FDBPMpropagator.c` (`taperPerStep` / `twistPerStep`、BPM-MATLAB 由来) /
@@ -200,7 +206,7 @@ placeholder 等) も 0 件で、**新規の未実装項目はなし**。
 | # | 項目 | 優先度 | 規模 | 備考 |
 |---|---|---|---|---|
 | 1 | CUDA 版の TPA/掃引フル実装 (警告は対応済み) | 中 | 大 | GPU 実機がなく検証はコンパイルまで。要方針判断 |
-| 2 | モードソルバの入力キーワード接続 (`modes = <n>`) | 中 | 中 | モード出力 + モード整合励振。単体テストで検証可能 |
+| 2 | ~~モードソルバの入力キーワード接続~~ | - | - | ✅ 対応済み (第 3 回監査の項を参照) |
 | 3 | テーパ/ツイストの公開 (カーネル対応済み) | 中 | 中 | 近軸パス限定。解析解 (断熱定理) で検証可能 |
 | 4 | MPI 版の BPM 対応 or「FDTD のみ」と明記 | 中 | 大/小 | 明記のみなら ReadMe 1 行 |
 | 5 | GPU 実機での実行検証 | 低 | - | 環境要因 (ビルド検証は完了) |

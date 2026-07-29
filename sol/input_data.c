@@ -76,6 +76,8 @@ int input_data(FILE *fp)
 	BPM.wideangle = 0;
 	BPM.tiltx = BPM.tilty = 0;
 	BPM.frames = 0;   // 0 = スナップショット記録なし
+	BPM.nmodes = 0;   // 0 = モード解析なし
+	BPM.modeExcite = 0;
 
 	// 非線形吸収 (TPA) と入力パワー掃引 (省略時は従来動作 = 線形単発)
 	NTpaB = 0;
@@ -519,6 +521,13 @@ int input_data(FILE *fp)
 			// frames = <interval> : |E(x,y)|^2 スナップショットの記録間隔 [z ステップ]
 			// (0 = 記録なし。/field/frames へ出力し、tools/plot_ixz.py で動画化できる)
 			BPM.frames = atoi(token[2]);
+		}
+		else if (!strcmp(strkey, "modes")) {
+			// modes = <nModes> [excite] : 入力断面のモード解析 (虚軸伝搬法)。
+			// neff を obpm.log へ、モード形状を /modes へ出力する。
+			// excite 指定で入射ビームを基本モードに置き換える (モード整合励振)
+			BPM.nmodes = atoi(token[2]);
+			BPM.modeExcite = ((ntoken > 3) && !strcmp(token[3], "excite")) ? 1 : 0;
 		}
 		else if (!strcmp(strkey, "tpa")) {
 			// tpa = <material id> <beta[cm/GW]> : 二光子吸収 (TPA) 係数

@@ -238,6 +238,8 @@ EXTERN struct {
 	int    wideangle;         // 0 = paraxial, 1 = wide-angle Pade(1,1)
 	double tiltx, tilty;      // beam tilt angle [deg]
 	int    frames;            // |E(x,y)|^2 snapshot interval [z-steps] (0 = off)
+	int    nmodes;            // number of modes to solve at input plane (0 = off)
+	int    modeExcite;        // 1 = excite with fundamental mode (mode-matched)
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {

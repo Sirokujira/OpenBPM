@@ -219,6 +219,92 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     }
 
     // ============================================================
+    // モード解析 (modes = <nModes> [excite])
+    //   入力断面 (iz_start) の屈折率分布から虚軸伝搬法 (bpm/modes.cpp) で
+    //   導波モードを求め、neff をログへ、モード形状を HDF5 (/modes) へ出力する。
+    //   excite 指定時は入射ビームを基本モードで置き換える (モード整合励振)。
+    //   曲げ (bend) は反映しない (直線導波路の入力断面のモード)。
+    //   半ベクトルの deflation は近似のためスカラー演算子で解析する。
+    // ============================================================
+    int nModesFound = 0;
+    std::complex<double> *modeFields = NULL;
+    double *modeNeff = NULL;
+    if (BPM.nmodes > 0) {
+        const long NN2 = (long)P->Nx * P->Ny;
+        wabpm_params Wm;
+        Wm.Nx = Nx;
+        Wm.Ny = Ny;
+        Wm.dx = P->dx;
+        Wm.dy = P->dy;
+        Wm.k0 = k0;
+        Wm.n0 = P->n_0;
+        Wm.wideangle = 0;
+        Wm.pol = 0;
+
+        // 入力断面の比誘電率 (実部のみ : モードは無損失断面で定義する)
+        std::complex<double> *n2m = new std::complex<double>[NN2];
+        double nmax = P->n_0;
+        for (int iy = 0; iy < P->Ny; iy++) {
+            for (int ix = 0; ix < P->Nx; ix++) {
+                const floatcomplex nm = n_mat[iEx[NA(ix, iy, P->iz_start)]];
+                const double nr = CREALF(nm);
+                n2m[ix + (long)iy * P->Nx] = std::complex<double>(nr * nr, 0.0);
+                if (nr > nmax) nmax = nr;
+            }
+        }
+        // 虚軸ステップ幅 : 最大固有値 mu_max に対し a*mu_max ~ 0.5 となるよう選ぶ
+        const double mu_max = k0 * k0 * (nmax * nmax - P->n_0 * P->n_0);
+        Wm.dz = (mu_max > 0) ? (2.0 * k0 * P->n_0 / mu_max) : (10.0 * P->dx);
+
+        modeFields = new std::complex<double>[(size_t)BPM.nmodes * NN2];
+        modeNeff = new double[BPM.nmodes];
+        nModesFound = wabpm_find_modes(&Wm, n2m, BPM.nmodes, 20000, 1e-12,
+                                       modeFields, modeNeff);
+        delete[] n2m;
+
+        sprintf(str, "modes : %d / %d converged (imaginary-distance BPM, scalar)",
+                nModesFound, BPM.nmodes);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+        for (int m = 0; m < nModesFound; m++) {
+            sprintf(str, "mode %d : neff = %.6f", m + 1, modeNeff[m]);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+
+        // モード整合励振 : 入射ビームを基本モードで置き換える。
+        // 振幅はガウシアン励振と同じ規約 (ピーク振幅 = 給電電圧)、
+        // beamtilt の位相ランプは維持する。
+        if (BPM.modeExcite && nModesFound > 0) {
+            const double volt = (NFeed > 0) ? Feed[0].volt : 1;
+            const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
+            const double kty = k0 * P->n_0 * sin(BPM.tilty * DTOR);
+            double mmax = 0;
+            for (long i = 0; i < NN2; i++) {
+                mmax = MAX(mmax, std::abs(modeFields[i]));
+            }
+            const double scale = (mmax > 0) ? (volt / mmax) : 1;
+            double power = 0;
+            for (int iy = 0; iy < P->Ny; iy++) {
+                for (int ix = 0; ix < P->Nx; ix++) {
+                    const long i = ix + (long)iy * P->Nx;
+                    const std::complex<double> a = scale * modeFields[i];
+                    const double ph = -(ktx * (Xc[ix] - xc0)) - (kty * (Yc[iy] - yc0));
+                    const std::complex<double> e =
+                        a * std::complex<double>(cos(ph), sin(ph));
+                    floatcomplex ef = {(float)e.real(), (float)e.imag()};
+                    P->E1[i] = ef;
+                    power += std::norm(e);
+                }
+            }
+            P->precisePower = power;
+            sprintf(str, "modes : mode-matched excitation with mode 1 (peak amp = %g)", volt);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+    }
+
+    // ============================================================
     // 非線形吸収 (TPA) / 入力パワー掃引 (ONN 光活性化関数) の準備
     //   - 物理スケーリング : 初期界を ∫∫|E|^2 dA = P_in [W] になるよう正規化し、
     //     |E|^2 がそのまま強度 I [W/m^2] になるようにする (面積要素 dA = Dx*Dy)。
@@ -674,6 +760,37 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         H5Gclose(field_group_id);
     }
 
+    // モード解析結果 (/modes) の書き込み : mode<i> (nModesFound x Ny x Nx) と neff
+    if (nModesFound > 0) {
+        hid_t modes_group_id = H5Gcreate(file_id, "/modes", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        const long NN2 = (long)P->Nx * P->Ny;
+        float *tmp = (float *)malloc((size_t)NN2 * sizeof(float));
+        char dsname[32];
+        for (int m = 0; m < nModesFound; m++) {
+            // モードは実数 (無損失断面) だが規約に合わせ実部を格納する
+            for (long i = 0; i < NN2; i++) {
+                tmp[i] = (float)modeFields[(size_t)m * NN2 + i].real();
+            }
+            hsize_t mdims[2] = {(hsize_t)P->Ny, (hsize_t)P->Nx};
+            sprintf(dsname, "mode%d", m + 1);
+            dataspace_id = H5Screate_simple(2, mdims, NULL);
+            dataset_id = H5Dcreate(modes_group_id, dsname, H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmp);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        free(tmp);
+        {
+            hsize_t ndims[1] = {(hsize_t)nModesFound};
+            dataspace_id = H5Screate_simple(1, ndims, NULL);
+            dataset_id = H5Dcreate(modes_group_id, "neff", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, modeNeff);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        H5Gclose(modes_group_id);
+    }
+
     // メタデータの作成
     hid_t metadata_group_id = H5Gcreate(file_id, "/metadata", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
@@ -912,6 +1029,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     if (sweepPout != NULL) free(sweepPout);
     free(Ixz);
     if (Frames) free(Frames);
+    if (modeFields) delete[] modeFields;
+    if (modeNeff) delete[] modeNeff;
 
     return;
 }
