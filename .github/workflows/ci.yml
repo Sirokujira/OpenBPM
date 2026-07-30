@@ -324,5 +324,8 @@ jobs:
       - name: Configure (MPI)
         run: cmake -B build_mpi -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=ON
 
-      - name: Build obpm_mpi
-        run: cmake --build build_mpi --target obpm_mpi -j"$(nproc)"
+      # obpm_mpi だけでなく全ターゲットをビルドする。並列 HDF5 のヘッダは
+      # mpi.h を include するため、MPI を使わない obpm / obpm_post 側が
+      # 壊れていても --target obpm_mpi では検知できない (実際に起きた)。
+      - name: Build all targets (obpm / obpm_post / obpm_mpi)
+        run: cmake --build build_mpi -j"$(nproc)"

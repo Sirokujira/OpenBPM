@@ -118,6 +118,16 @@ if (HDF5_FOUND)
       #  # MPI is always built with HDF5 if available
       #  set(OP2_MPI_INCLUDE_DIRS ${HDF5_INCLUDE_DIRS} ${OP2_MPI_INCLUDE_DIRS})
       #  set(OP2_MPI_LIBRARIES ${HDF5_LIBRARIES} ${OP2_MPI_LIBRARIES})
+        # 並列 HDF5 のヘッダ (H5public.h) は mpi.h を include するため、
+        # MPI を使わないターゲット (obpm / obpm_post / テスト) が HDF5::HDF5 を
+        # リンクしただけでは mpi.h が見つからずビルドが失敗する。
+        # インポートターゲットの INTERFACE に MPI を足して全利用者へ伝播させる
+        # (並列 libhdf5 自体が libmpi に依存するのでリンクも必要)。
+        if (TARGET HDF5::HDF5 AND TARGET MPI::MPI_C)
+          set_property(TARGET HDF5::HDF5 APPEND
+                       PROPERTY INTERFACE_LINK_LIBRARIES MPI::MPI_C)
+          message(STATUS "並列 HDF5 を検出: HDF5::HDF5 に MPI::MPI_C を伝播させます")
+        endif()
       else()
         message(STATUS "HDF5 is built with parallel support requiring MPI, but MPI is disabled")
         message(STATUS "Disabling HDF5 support")
