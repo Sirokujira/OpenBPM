@@ -143,8 +143,27 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->Ny_n = Ny;
     P->Nz_n = 1;
     P->dz_n = P->dz;
-    P->taperPerStep = 0.0;
-    P->twistPerStep = 0.0;
+    // テーパ (taper = 出口/入口の横方向スケール比) とツイスト (twist = [deg/m]) :
+    // 屈折率分布を座標変換 (相似縮小 + 回転) で z に沿って変化させる。
+    //   カーネル規約 : スケール係数 = 1 - taperPerStep*iz、回転角 = twistPerStep*iz [rad]
+    // 変換時の屈折率分布は**入力断面 (iz_start) の 2D 分布**を参照する
+    // (geometry 自体の z 変化とは併用しない)。
+    const long nzstep = P->iz_end - P->iz_start;
+    if (BPM.taper <= 0) {
+        sprintf(str, "*** warning : taper must be > 0 (given %g), ignored.", BPM.taper);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+        BPM.taper = 1;
+    }
+    P->taperPerStep = (nzstep > 0) ? (float)((1.0 - BPM.taper) / nzstep) : 0.0f;
+    P->twistPerStep = (float)(BPM.twist * DTOR * P->dz);
+    const int xform = (P->taperPerStep != 0.0f) || (P->twistPerStep != 0.0f);
+    if (xform) {
+        sprintf(str, "taper : ratio = %.4f (per step %.6e), twist : %.4f [deg/m] (total %.2f [deg])",
+                BPM.taper, P->taperPerStep, BPM.twist, BPM.twist * (Zn[Nz] - Zn[0]));
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
     // 曲げ : 入力 (bend = RoC [dir] [rho_e]) があれば等価屈折率法で反映する
     if (BPM.RoC > 0) {
         P->rho_e = (float)BPM.rho_e;
@@ -485,12 +504,44 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             const double t0 = cputime();
 
             // このスライスの複素比誘電率 (n_mat は損失を +imag で保持 -> 物理符号 n = nr - i*ni に戻す)
+            // テーパ/ツイスト指定時は入力断面を座標変換 (相似縮小 + 回転) して参照する
+            // (近軸カーネル bpm/FDBPMpropagator.c と同一の変換式)
+            const long izr = iz - P->iz_start;
+            const double xfScale = 1.0 / (1.0 - (double)P->taperPerStep * izr);
+            const double xfCos = cos(-(double)P->twistPerStep * izr);
+            const double xfSin = sin(-(double)P->twistPerStep * izr);
             for (int iy = 0; iy < P->Ny; iy++) {
                 for (int ix = 0; ix < P->Nx; ix++) {
                     long index = (long)(P->Nx * iy) + ix;
-                    int64_t nn = NA(ix, iy, iz);
-                    const floatcomplex nm = n_mat[iEx[nn]];
-                    double nr = CREALF(nm);
+                    double nr, nimag;
+                    if (xform) {
+                        // 出力格子点に対応する入力断面上の位置を双一次補間で取得
+                        const double x = P->dx * (ix - (P->Nx - 1) / 2.0);
+                        const double y = P->dy * (iy - (P->Ny - 1) / 2.0);
+                        const double xs = xfScale * ((xfCos * x) - (xfSin * y));
+                        const double ys = xfScale * ((xfSin * x) + (xfCos * y));
+                        double fx = (xs / P->dx) + ((P->Nx - 1) / 2.0);
+                        double fy = (ys / P->dy) + ((P->Ny - 1) / 2.0);
+                        fx = MIN(MAX(0.0, fx), (P->Nx - 1) * (1.0 - 1e-7));
+                        fy = MIN(MAX(0.0, fy), (P->Ny - 1) * (1.0 - 1e-7));
+                        const int i0 = (int)floor(fx);
+                        const int j0 = (int)floor(fy);
+                        const double tx = fx - i0;
+                        const double ty = fy - j0;
+                        const floatcomplex n00 = n_mat[iEx[NA(i0,     j0,     P->iz_start)]];
+                        const floatcomplex n10 = n_mat[iEx[NA(i0 + 1, j0,     P->iz_start)]];
+                        const floatcomplex n01 = n_mat[iEx[NA(i0,     j0 + 1, P->iz_start)]];
+                        const floatcomplex n11 = n_mat[iEx[NA(i0 + 1, j0 + 1, P->iz_start)]];
+                        nr    = ((1 - tx) * (1 - ty) * CREALF(n00)) + (tx * (1 - ty) * CREALF(n10))
+                              + ((1 - tx) * ty * CREALF(n01))       + (tx * ty * CREALF(n11));
+                        nimag = ((1 - tx) * (1 - ty) * CIMAGF(n00)) + (tx * (1 - ty) * CIMAGF(n10))
+                              + ((1 - tx) * ty * CIMAGF(n01))       + (tx * ty * CIMAGF(n11));
+                    }
+                    else {
+                        const floatcomplex nm = n_mat[iEx[NA(ix, iy, iz)]];
+                        nr    = CREALF(nm);
+                        nimag = CIMAGF(nm);
+                    }
                     if (bend) {
                         const double x = P->dx * (ix - (P->Nx - 1) / 2.0);
                         const double y = P->dy * (iy - (P->Ny - 1) / 2.0);
@@ -498,7 +549,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                         nr = nr * (1.0 - nr * nr * xb * BPM.rho_e / (2.0 * BPM.RoC))
                                 * exp(xb / BPM.RoC);
                     }
-                    std::complex<double> n(nr, -CIMAGF(nm));
+                    std::complex<double> n(nr, -nimag);
                     n2[index] = n * n;
                 }
             }
@@ -570,12 +621,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         const double t0 = cputime();
 
         // このスライスの複素屈折率分布を材料 ID から設定 (虚部 = 導電率による吸収)
+        // テーパ/ツイスト指定時は入力断面を渡し、z 変化はカーネル側の座標変換に任せる
+        const int64_t iz_n = xform ? P->iz_start : iz;
         for (int iy = 0; iy < P->Ny; iy++)
         {
             for (int ix = 0; ix < P->Nx; ix++)
             {
                 long index = (long)(P->Nx * iy) + ix;
-                int64_t nn = NA(ix, iy, iz);
+                int64_t nn = NA(ix, iy, iz_n);
                 P->n_in[index] = n_mat[iEx[nn]];
             }
         }

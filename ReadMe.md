@@ -139,6 +139,8 @@ ctest --test-dir build --output-on-failure
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
 | `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
+| `taper` | `taper = <ratio>` | 出口での横方向スケール比 (入口 = 1)。屈折率分布を z に沿って相似縮小/拡大する (座標変換)。省略時 1 |
+| `twist` | `twist = <rate[deg/m]>` | 導波路のツイスト率。屈折率分布を z に沿って回転させる。省略時 0 |
 | `modes` | `modes = <nModes> [excite]` | 入力断面のモード解析 (虚軸伝搬法)。導波条件 (n_clad < neff) を満たすモードを neff 降順に求め、`/modes/mode<i>` と `/modes/neff` に出力。`excite` 指定で入射ビームを基本モードに置き換え (モード整合励振)。省略時は解析なし |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
 | `powersweep` | `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log\|lin]` | 入力パワー掃引 (既定 lin)。`activation_curve.csv` に P_out(P_in) を出力。省略時は従来の単発計算 |
@@ -149,6 +151,23 @@ ctest --test-dir build --output-on-failure
 
 - `feed` の電圧はビーム振幅として使用されます。
 - メッシュは等間隔を推奨します (不均一の場合は平均セル幅で計算し警告を表示)。
+
+### テーパ / ツイスト (座標変換)
+
+`taper` / `twist` を指定すると、屈折率分布を伝搬に沿って相似縮小・回転させます
+(BPM-MATLAB の座標変換方式)。`geometry` を z 方向に階段近似する必要がありません
+(対比: `data/fiber_taper.ofd` は階段近似)。
+
+- **指定時は入力断面 (z 始端) の 2D 分布のみを参照します**。`geometry` 自体の
+  z 変化とは併用できません (入力断面が変換されて全 z に適用されます)。
+- スケール係数は `1 - (1-ratio)*(iz/Nz)`、回転角は `twist * z` です。
+  `bend` / `wideangle` / `polarization` とは併用可能で、CPU の近軸・拡張の
+  両経路と CUDA 版に実装されています。
+- サンプル: `data/sample/taper_twist.ofd` (矩形コア 8x2um を 0.5 倍に縮小しつつ
+  200um で 90 度回転)。出力屈折率分布 `/field/n_out_r` が実際に縮小・回転したもの
+  になり (主軸 89.1 度 / 理論 90 度)、変換は断熱的で電力が保存します (P/P0 = 0.9985)。
+- 検証: 一様媒質では変換を掛けても結果不変 (拡張パスは倍精度で厳密一致)、
+  円形コアの taper では出力コア半径が `a*ratio` に一致 (2.08um / 理論 2.05um)。
 
 ### ONN 光活性化関数 (非線形吸収 TPA + パワー掃引)
 

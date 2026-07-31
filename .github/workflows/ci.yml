@@ -71,6 +71,20 @@ jobs:
                print "mode analysis OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
 
+      # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
+      # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
+      - name: Smoke test — taper / twist (coordinate transform)
+        run: |
+          mkdir -p /tmp/smoke-tt && cp data/sample/taper_twist.ofd /tmp/smoke-tt/
+          cd /tmp/smoke-tt
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 taper_twist.ofd
+          grep -q "normal end" obpm.log
+          grep -q "total 90.00 \[deg\]" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
+               print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -168,6 +182,20 @@ jobs:
                if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
                print "mode analysis OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+
+      # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
+      # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
+      - name: Smoke test — taper / twist (coordinate transform)
+        run: |
+          mkdir -p /tmp/smoke-tt && cp data/sample/taper_twist.ofd /tmp/smoke-tt/
+          cd /tmp/smoke-tt
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 taper_twist.ofd
+          grep -q "normal end" obpm.log
+          grep -q "total 90.00 \[deg\]" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
+               print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
@@ -282,6 +310,16 @@ jobs:
                if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
                print "mode analysis OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+          # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
+          mkdir -p ../smoke-tt && cd ../smoke-tt
+          cp ../data/sample/taper_twist.ofd .
+          ../bin/obpm.exe -n 2 taper_twist.ofd
+          grep -q "normal end" obpm.log
+          grep -q "total 90.00 \[deg\]" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
+               print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4

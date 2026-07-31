@@ -78,6 +78,8 @@ int input_data(FILE *fp)
 	BPM.frames = 0;   // 0 = スナップショット記録なし
 	BPM.nmodes = 0;   // 0 = モード解析なし
 	BPM.modeExcite = 0;
+	BPM.taper = 1;    // 1 = テーパなし (出口/入口の横方向スケール比)
+	BPM.twist = 0;    // 0 = ツイストなし [deg/m]
 
 	// 非線形吸収 (TPA) と入力パワー掃引 (省略時は従来動作 = 線形単発)
 	NTpaB = 0;
@@ -521,6 +523,15 @@ int input_data(FILE *fp)
 			// frames = <interval> : |E(x,y)|^2 スナップショットの記録間隔 [z ステップ]
 			// (0 = 記録なし。/field/frames へ出力し、tools/plot_ixz.py で動画化できる)
 			BPM.frames = atoi(token[2]);
+		}
+		else if (!strcmp(strkey, "taper")) {
+			// taper = <ratio> : 出口での横方向スケール比 (入口 = 1)。
+			// 屈折率分布を z に沿って相似縮小/拡大する (座標変換, 近軸パス由来)
+			BPM.taper = atof(token[2]);
+		}
+		else if (!strcmp(strkey, "twist")) {
+			// twist = <rate[deg/m]> : 導波路のツイスト率 (座標系を z に沿って回転)
+			BPM.twist = atof(token[2]);
 		}
 		else if (!strcmp(strkey, "modes")) {
 			// modes = <nModes> [excite] : 入力断面のモード解析 (虚軸伝搬法)。

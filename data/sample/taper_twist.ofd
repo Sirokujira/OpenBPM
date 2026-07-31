@@ -1,0 +1,61 @@
+# OpenBPM sample : taper + twist (座標変換による導波路のテーパとツイスト)
+#
+# 矩形コア (8um x 2um) の導波路を、伝搬に沿って相似縮小 (taper) しながら
+# 回転 (twist) させる。屈折率分布は**入力断面**を座標変換して z 変化させるため、
+# geometry を z 方向に階段近似する必要がない (対比: data/fiber_taper.ofd)。
+#
+#   taper = 0.5      : 出口での横方向スケール比 (8x2um -> 4x1um)
+#   twist = 450000   : ツイスト率 [deg/m]。200um で合計 90 度回転
+#
+# 期待される動作 (BPM のロジック確認ポイント, z = 200um 実測):
+#   1. 出力屈折率分布 /field/n_out_r が「入力断面を 0.5 倍に縮小し 90 度回転」
+#      したものになる。主軸 = 90 度 (実測 89.1 度)、広がり 2σ = (0.80, 2.35)um
+#      -> 入射時は x 方向に長い (8x2um)、出射時は y 方向に長い (1x4um)
+#   2. 変換は断熱的で電力はほぼ保存する (P/P0 = 0.9985)
+#   3. obpm.log に "taper : ratio = 0.5000 ..., twist : ... (total 90.00 [deg])" が出る
+#
+# 変換式の検証 (いずれも解析的に厳密な性質):
+#   - 一様媒質では taper/twist を掛けても結果が変わらない
+#     (拡張パスは倍精度で厳密に一致、近軸パスは float32 補間の丸めで ~4e-6)
+#   - taper のみ (円形コア) では出力コア半径が a*ratio になる (4.1 -> 2.08um / 理論 2.05)
+#   - 円形コア (回転対称) のツイストは結果を変えない。階段近似した円の離散化により
+#     有限の差が残るが、格子細分で単調に減少する (dx=1/3um: 7.2e-2 -> 1/9um: 3.4e-2)
+OpenBPM 2 2
+title = tapered and twisted waveguide (BPM sample)
+
+xmesh = -15e-6 90 15e-6
+ymesh = -15e-6 90 15e-6
+zmesh = 0 200 200e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>  (id starts at 2)
+# クラッド (n = 1.4440)
+material = 1 2.085136 0 1 0
+# コア (n = 1.4504)
+material = 1 2.103660 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+# コアは矩形 (8um x 2um) : 回転が判別できるよう非対称にする
+geometry = 2 1 -15e-6 15e-6 -15e-6 15e-6 0 200e-6
+geometry = 3 1 -4e-6 4e-6 -1e-6 1e-6 0 200e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]>
+beam = 4.0e-6
+
+# refindex = <n0>
+refindex = 1.444
+
+# taper = <ratio> : 出口での横方向スケール比 (入口 = 1)
+taper = 0.5
+
+# twist = <rate[deg/m]> : ツイスト率 (200um で 90 度)
+twist = 450000
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

@@ -240,6 +240,8 @@ EXTERN struct {
 	int    frames;            // |E(x,y)|^2 snapshot interval [z-steps] (0 = off)
 	int    nmodes;            // number of modes to solve at input plane (0 = off)
 	int    modeExcite;        // 1 = excite with fundamental mode (mode-matched)
+	double taper;             // transverse scale ratio at output (1 = no taper)
+	double twist;             // twist rate [deg/m] (0 = no twist)
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {
