@@ -2,12 +2,23 @@
 # CUDA/MPI はランナーに無いため WITH_CUDA=OFF / WITH_MPI=OFF でビルドする。
 name: CI
 
+# 課金対策 (private リポジトリは Actions 無料枠 2,000 分/月):
+# - 以前は push (claude/**) と pull_request の両方が発火し、PR を持つブランチでは
+#   同一コミットで全ジョブが 2 回走っていた → push は main とタグのみに限定。
+#   作業ブランチは PR イベント側でカバーする (PR の無いブランチは workflow_dispatch で
+#   手動実行できる)。
+# - concurrency で同一 ref の旧 run をキャンセルし、連続 push の重複消費を防ぐ。
 on:
   push:
-    branches: [ main, "claude/**" ]
+    branches: [ main ]
     tags: [ "v*" ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build-cpu:
@@ -108,6 +119,10 @@ jobs:
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
   # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
   build-macos:
+    # macOS ランナーは課金レート x10 (private リポジトリ) で最も高価なため、
+    # main への push・タグ・手動実行のみに限定する (PR では実行しない)。
+    # PR 段階の移植性は build-windows (MSVC, x2) が主に担保している。
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
