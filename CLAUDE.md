@@ -43,7 +43,7 @@ cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activ
 | `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` から使用 |
 | `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
 | `post/postbpm.c` | obpm_post の BPM (/field) 可視化 |
-| `tests/` | ctest (wabpm/modes/allset)。`tools/plot_ixz.py` は伝搬マップ描画 |
+| `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN 活性化 / モードビート / 波長掃引)。`tools/plot_ixz.py` は伝搬マップ描画 |
 
 出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/frames`,
 `/metadata/*`) + `obpm.out` (FDTD 形式。obpm_post の入力。`-no-fdtd-out` で省略可)
@@ -87,7 +87,16 @@ cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activ
 - **Dt/Tw は setup() が自動計算する**: 「ユーザーが指定したか」の判定に
   `Dt != 0` 等は使えない。
 - **CI は obpm.log の "normal end" と HDF5 の存在を検証する**: 終了メッセージや
-  ファイル名を変えるときは CI (linux/macOS/Windows の 3 ジョブ) も併せて更新する。
+  ファイル名を変えるときは CI (linux/macOS/Windows の 3 OS ジョブ) も併せて更新する。
+- **CI 全ジョブが数秒で failure ならコードではない**: private リポジトリの
+  Actions 無料枠 (月 2,000 分、macOS ×10 換算) の枯渇。症状は `runner_id: 0`・
+  ステップ実行なし・ログ 404。`Ping` ワークフロー (echo のみ) の手動実行で
+  1 分未満で切り分けられる。ワークフロー YAML の構文エラーなら conclusion が
+  `startup_failure` になるので区別できる。
+- **並列 HDF5 のヘッダは mpi.h を要求する**: `WITH_MPI=ON` では MPI を使わない
+  `obpm`/`obpm_post` もビルドが壊れるため、CMakeLists が `HDF5::HDF5` に
+  `MPI::MPI_C` を伝播させている。CI の build-mpi は全ターゲットをビルドして
+  これを検知する (`--target obpm_mpi` だけでは素通りする)。
 - **メッシュ配列**: `Xn/Yn/Zn` は節点 (要素数 N+1)、`Xc/Yc/Zc` はセル中心。
   セル幅は `(Xn[Nx]-Xn[0])/Nx` (演算子優先順位のバグが過去に複数あった)。
 
@@ -100,5 +109,12 @@ cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activ
 ## CI
 
 `.github/workflows/ci.yml`: Linux / macOS / Windows (MSVC + Ninja +
-vcpkg `hdf5[core,zlib]:x64-windows-static-md`) + CUDA ビルド検証。
-Linux では ctest と data/ 全サンプルのスモークも実行。タグ `v*` で Release 添付。
+vcpkg `hdf5[core,zlib]:x64-windows-static-md`) の 3 OS + CUDA / MPI ビルド検証の
+計 5 ジョブ。3 OS とも ctest を実行、Linux は data/ 全サンプルのスモークも実行。
+タグ `v*` で Release 添付。
+
+課金対策 (private リポジトリの無料枠節約) のため:
+- push トリガーは main とタグのみ。作業ブランチは PR イベントでカバー
+  (二重実行の防止)。PR の無いブランチは workflow_dispatch で手動実行
+- build-macos (課金 ×10) は PR では skip (main push / タグ / 手動のみ)
+- `ping.yml` (Ping) はランナー割り当て診断用の最小ワークフロー (echo のみ)

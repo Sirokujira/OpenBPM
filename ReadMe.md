@@ -104,6 +104,7 @@ ctest --test-dir build --output-on-failure
 | `data/fiber.ofd` | 光ファイバ (SMF-28 相当, コア半径 4.1um, V=2.26 シングルモード)。LP01 モードの閉じ込め (Marcuse 近似 w=4.7um と比較可能) |
 | `data/fiber_offset.ofd` | 光ファイバへの軸ずれ入射 (2um オフセット)。コア中心への引き込みと結合損失 |
 | `data/spectrum_sweep.ofd` | 波長掃引 (`wlsweep = 1`、1.50-1.60um の 5 点)。`spectrum.csv` に透過率スペクトルを出力 |
+| `data/fiber_mode.ofd` | SMF の基本モード励振 (`launch = mode 0`)。虚軸伝搬法で求めた LP01 を初期界にし、ガウシアン励振より放射損の少ない定常伝搬 |
 | `data/fiber_mode_superposition.ofd` | MMF の LP01+LP11 重ね合わせ励振 (`launch = mode 0 1`)。モードビート (実測周期 5710um / 理論 λ/Δneff = 5762um) |
 | `data/fiber_mmf.ofd` | マルチモードファイバ (コア径 50um, NA=0.2, V=20.3)。オフセット励振によるコア内反射と閉じ込め |
 | `data/fiber_splice.ofd` | コア径不整合の融着接続 (4.1um -> 2.0um)。接続点でのモード変換と放射 (理論 T=0.83) |
@@ -192,21 +193,34 @@ ctest --test-dir build --output-on-failure
 
 ## CI / Release
 
-push / PR ごとに以下のジョブを実行します。
+GitHub Actions で以下のジョブを実行します。トリガーは **main への push・タグ push・
+PR (base = main)・手動実行 (workflow_dispatch)** です。
 
-| ジョブ | 内容 |
-|---|---|
-| `build-cpu` (Linux/gcc) | CPU ビルド + `ctest` + `fiber.ofd` スモーク + `data/` 全サンプルスモーク + ONN 活性化関数の定量検証 |
-| `build-macos` (AppleClang + Homebrew libomp/Eigen) | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
-| `build-windows` (MSVC + Ninja + vcpkg) | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
-| `build-cuda` | CUDA Toolkit を導入し `obpm_cuda` のコンパイル・リンクを検証 (ランナーに GPU は無いため実行はしない) |
-| `build-mpi` | MPI + 並列 HDF5 を導入し `obpm_mpi` (FDTD ソルバー) のビルドを検証 |
+| ジョブ | 実行条件 | 内容 |
+|---|---|---|
+| `build-cpu` (Linux/gcc) | すべて | CPU ビルド + `ctest` + `fiber.ofd` スモーク + `data/` 全サンプルスモーク + ONN 活性化関数の定量検証 |
+| `build-macos` (AppleClang + Homebrew libomp/Eigen) | **PR 以外** (main push / タグ / 手動) | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
+| `build-windows` (MSVC + Ninja + vcpkg) | すべて | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
+| `build-cuda` | すべて | CUDA Toolkit を導入し `obpm_cuda` のコンパイル・リンクを検証 (ランナーに GPU は無いため実行はしない) |
+| `build-mpi` | すべて | MPI + 並列 HDF5 を導入し全ターゲット (`obpm` / `obpm_post` / `obpm_mpi`) のビルドを検証 |
 
-- ONN 活性化関数の検証は 3 OS とも `tests/check_activation.py` (解析解との
+- ONN 活性化関数の検証は各 OS とも `tests/check_activation.py` (解析解との
   相対 7% 比較) を使用します
 - ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64` /
   `obpm-windows-x64`) に保存
 - `v*` タグを push すると GitHub Release にバイナリが自動添付されます
+
+> ℹ **Actions 課金についての注記** (private リポジトリの無料枠は月 2,000 分、
+> macOS ×10 / Windows ×2 換算):
+> - push トリガーを main とタグに限定しています。作業ブランチは PR イベント側で
+>   カバーされるため、PR を持つブランチでの二重実行 (push + pull_request) は
+>   発生しません。PR の無いブランチは workflow_dispatch で手動実行できます。
+> - 同一ブランチへの連続 push は `concurrency` により古い run を自動キャンセルします。
+> - 課金レートが最も高い macOS ジョブは PR では実行しません (上表)。
+> - **全ジョブが数秒で failure になる場合** (`runner_id: 0`、ステップ実行なし、
+>   ログ 404) はコードではなく無料枠の枯渇・課金設定が原因です。最小ワークフロー
+>   `Ping` (`.github/workflows/ping.yml`、echo のみ) を手動実行すると 1 分未満で
+>   切り分けられます。
 
 ## 姉妹リポジトリ
 
