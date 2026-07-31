@@ -199,7 +199,7 @@ CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する
   - 現状: 対称構造で計算領域を 1/2〜1/4 にできるカーネル機能が使われていない。
   - 対応案: 入力キーワードで公開する (最適化のため機能追加の優先度は低)。
 
-- [ ] **Windows CI のテストカバレッジが Linux/macOS より狭い**
+- [x] **Windows CI のテストカバレッジが Linux/macOS より狭い** ✅ 対応済み (第 6 回後)
   - 場所: `.github/workflows/ci.yml` (build-windows ジョブ)
   - 現状: Windows は単体テスト (ctest) を実行せず、ONN スモークも単調性判定のみ
     (解析解 ±8% 判定は Linux/macOS のみ)。
@@ -252,7 +252,7 @@ main に新規変更なし、マーカー走査 0 件。E2E 検証 (ONN/回折/�
 
 ## 新規: 低優先度
 
-- [ ] **モード形状 (`/modes`) の可視化が未対応**
+- [x] **モード形状 (`/modes`) の可視化が未対応** ✅ 対応済み (第 6 回後)
   - 場所: `tools/plot_ixz.py` / `post/postbpm.c` (いずれも `/modes` を読まない)
   - 現状: `modes` キーワードで HDF5 に出力される `/modes/mode<i>` と `/modes/neff` を
     可視化する経路がない (HDF5 規約「新規データセット追加時は plot_ixz.py と
