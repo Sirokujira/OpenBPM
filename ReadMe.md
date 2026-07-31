@@ -40,6 +40,9 @@ cmake --build build -j
     スカラー近軸は `bpm/FDBPMpropagator.cu`、広角/半ベクトルは `bpm/wabpm.cu` を使用します。
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI)
+  - **MPI 版は OpenFDTD 由来の FDTD (時間領域) ソルバのみで、BPM は未対応です**。
+    BPM の並列化は OpenMP (CPU 版 `obpm`) または CUDA 版 `obpm_cuda` を使用してください
+    (BPM の ADI は z 方向に逐次のため、MPI 領域分割は転置通信が必要で費用対効果が低い)。
 
 ## 可視化
 
@@ -52,6 +55,8 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
 
 - `*_ixz.png` : 伝搬マップ `/field/Ixz` のヒートマップ
 - `*_final.png` : 最終電界 `|E(x,y)|^2` と屈折率分布
+- `*_modes.png` : 導波モード形状と neff (入力に `modes = <nModes>` を指定して
+  `/modes` を出力した場合のみ)
 - `*_prop.gif` : `|E(x,y)|^2` の伝搬アニメーション (入力に `frames = <interval>` を
   指定して `/field/frames` を記録した場合のみ)
 

@@ -4,6 +4,8 @@
 生成物 (入力 HDF5 と同じディレクトリに出力):
   - <prefix>_ixz.png    : 伝搬マップ |E(x, y=Ny/2, z)|^2 (/field/Ixz)
   - <prefix>_final.png  : 最終電界 |E(x,y)|^2 と屈折率分布 (/field/Efinal_*, n_out_r)
+  - <prefix>_modes.png  : 導波モード形状と neff (/modes がある場合のみ。
+                          ソルバ入力で `modes = <nModes>` を指定して解析する)
   - <prefix>_prop.gif   : |E(x,y)|^2 の伝搬アニメーション (/field/frames がある場合のみ。
                           ソルバ入力で `frames = <interval>` を指定して記録する)
 
@@ -55,6 +57,12 @@ def main():
         dz = read_scalar(f, "/metadata/grid_dz")
         dy = read_scalar(f, "/metadata/grid_dy")
         frame_interval = read_scalar(f, "/metadata/frame_interval", 0)
+        mode_fields = []
+        mode_neff = []
+        if "/modes" in f:
+            mode_neff = list(np.asarray(f["/modes/neff"]))
+            for m in range(len(mode_neff)):
+                mode_fields.append(f[f"/modes/mode{m + 1}"][:])
 
     Ifinal = er ** 2 + ei ** 2
     Ny, Nx = Ifinal.shape
@@ -109,6 +117,33 @@ def main():
     fig.savefig(f"{prefix}_final.png", dpi=150)
     plt.close(fig)
     print(f"wrote {prefix}_final.png")
+
+    # --- 導波モード形状 (/modes) ---
+    if mode_fields:
+        nm = len(mode_fields)
+        ncols_m = min(nm, 3)
+        nrows_m = (nm + ncols_m - 1) // ncols_m
+        fig, axes = plt.subplots(nrows_m, ncols_m,
+                                 figsize=(5 * ncols_m, 4.5 * nrows_m))
+        axes = np.atleast_1d(axes).ravel()
+        for m, (fld, ne) in enumerate(zip(mode_fields, mode_neff)):
+            # モードは符号付きの実数場なので発散配色 (0 中心) で描く
+            # (べき乗法の符号は任意のため、最大振幅点が正になるよう正規化)
+            if fld.flat[np.abs(fld).argmax()] < 0:
+                fld = -fld
+            vmax = np.abs(fld).max()
+            im = axes[m].imshow(fld, origin="lower", extent=extent_xy(),
+                                cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+            axes[m].set_title(f"mode {m + 1}  (neff = {ne:.6f})")
+            axes[m].set_xlabel(f"x [{unit}]")
+            axes[m].set_ylabel(f"y [{unit}]")
+            fig.colorbar(im, ax=axes[m])
+        for m in range(nm, len(axes)):
+            axes[m].set_visible(False)
+        fig.tight_layout()
+        fig.savefig(f"{prefix}_modes.png", dpi=150)
+        plt.close(fig)
+        print(f"wrote {prefix}_modes.png ({nm} modes)")
 
     # --- 伝搬アニメーション ---
     if frames is not None:
