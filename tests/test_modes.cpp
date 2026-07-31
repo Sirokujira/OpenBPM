@@ -16,6 +16,7 @@ w = a*sqrt(beta^2 - k0^2 nclad^2))。これを二分法で解いた neff と、
 */
 
 #include "bpm/wabpm.h"
+#include "bessel_ref.h"   // std::cyl_bessel_j/k は libc++ 未実装のため自前実装を使用
 
 #include <complex>
 #include <vector>
@@ -47,8 +48,8 @@ static void check_true(const std::string &name, bool cond, const std::string &de
 static double lp_dispersion(int l, double u, double V)
 {
     const double w = std::sqrt(V * V - u * u);
-    return u * std::cyl_bessel_j(l + 1, u) / std::cyl_bessel_j(l, u)
-         - w * std::cyl_bessel_k(l + 1, w) / std::cyl_bessel_k(l, w);
+    return u * bessel_ref_j(l + 1, u) / bessel_ref_j(l, u)
+         - w * bessel_ref_k(l + 1, w) / bessel_ref_k(l, w);
 }
 
 // LP_l1 (最低次ラジアルモード) の u を二分法で解く
