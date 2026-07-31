@@ -26,6 +26,11 @@ import os
 import re
 import sys
 
+# Windows のコンソール/パイプは cp1252 等になり日本語出力で UnicodeEncodeError に
+# なるため UTF-8 に強制する (CI の ctest 経由で実際に発生した)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 try:
     import h5py
     import numpy as np

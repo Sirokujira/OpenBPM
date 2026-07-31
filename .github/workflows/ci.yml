@@ -225,10 +225,14 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Python3_EXECUTABLE を PATH の python に固定する。CMake の FindPython3 は
+      # hostedtoolcache 内の最新版 (pip install した python と別物) を拾うことが
+      # あり、ctest の h5py/numpy を使うテストが import エラーになる (実際に発生)
       - name: Configure (CPU only)
         run: >
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
+          "-DPython3_EXECUTABLE=$((Get-Command python).Source)"
           "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
 
