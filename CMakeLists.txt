@@ -54,6 +54,9 @@ if(WITH_MPI)
     #+cuda
     #find_package(MPI REQUIRED)
     add_compile_definitions(_MPI)
+    # MPI 版 (mpi/solve.c) は並列 HDF5 (H5Pset_fapl_mpio 等) を使うため、
+    # 後段の find_package(HDF5) で並列ビルドの HDF5 を優先させる
+    set(HDF5_PREFER_PARALLEL TRUE)
     message(STATUS "_MPI マクロが定義されました")
 else()
     message(STATUS "_MPI マクロは定義されていません")
@@ -115,6 +118,16 @@ if (HDF5_FOUND)
       #  # MPI is always built with HDF5 if available
       #  set(OP2_MPI_INCLUDE_DIRS ${HDF5_INCLUDE_DIRS} ${OP2_MPI_INCLUDE_DIRS})
       #  set(OP2_MPI_LIBRARIES ${HDF5_LIBRARIES} ${OP2_MPI_LIBRARIES})
+        # 並列 HDF5 のヘッダ (H5public.h) は mpi.h を include するため、
+        # MPI を使わないターゲット (obpm / obpm_post / テスト) が HDF5::HDF5 を
+        # リンクしただけでは mpi.h が見つからずビルドが失敗する。
+        # インポートターゲットの INTERFACE に MPI を足して全利用者へ伝播させる
+        # (並列 libhdf5 自体が libmpi に依存するのでリンクも必要)。
+        if (TARGET HDF5::HDF5 AND TARGET MPI::MPI_C)
+          set_property(TARGET HDF5::HDF5 APPEND
+                       PROPERTY INTERFACE_LINK_LIBRARIES MPI::MPI_C)
+          message(STATUS "並列 HDF5 を検出: HDF5::HDF5 に MPI::MPI_C を伝播させます")
+        endif()
       else()
         message(STATUS "HDF5 is built with parallel support requiring MPI, but MPI is disabled")
         message(STATUS "Disabling HDF5 support")
@@ -294,7 +307,7 @@ if (WITH_CUDA)
 
             #add_executable(obpm_cuda ${CUDA_SOURCES} src/cuda_Main.cu)
             #add_executable(obpm_cuda ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
-            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu bpm/wabpm.cu src/cuda_Main.cu)
+            add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu bpm/wabpm.cu bpm/wabpm.cpp bpm/modes.cpp src/cuda_Main.cu)
             #add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
 
             target_include_directories(obpm_cuda PUBLIC "${PROJECT_SOURCE_DIR}/include")
@@ -359,7 +372,6 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/initfield.c
             ${CMAKE_SOURCE_DIR}/sol/input_data.c
             ${CMAKE_SOURCE_DIR}/sol/input2.c
-            ${CMAKE_SOURCE_DIR}/sol/Makefile
             ${CMAKE_SOURCE_DIR}/sol/memallocfree1.c
             ${CMAKE_SOURCE_DIR}/sol/memallocfree2.c
             ${CMAKE_SOURCE_DIR}/sol/memallocfree3.c
@@ -389,7 +401,6 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/setupMurHx.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHy.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHz.c
-            ${CMAKE_SOURCE_DIR}/sol/setupNear.c_
             ${CMAKE_SOURCE_DIR}/sol/setupPml.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEx.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEy.c
@@ -427,7 +438,7 @@ else()
         if(MSVC)
             set_source_files_properties(bpm/FDBPMpropagator.c PROPERTIES LANGUAGE CXX)
         endif()
-        add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c bpm/wabpm.cpp sol/solve_bpm.cpp src/sol_Main.cpp)
+        add_executable(obpm ${SOURCES} bpm/initfield.cpp bpm/FDBPMpropagator.c bpm/wabpm.cpp bpm/modes.cpp sol/solve_bpm.cpp src/sol_Main.cpp)
         #target_link_libraries(obpm glfw)
         #target_link_libraries(obpm OpenGL::GL)
 
@@ -488,8 +499,16 @@ if (WITH_TESTS)
     add_executable(test_wabpm tests/test_wabpm.cpp bpm/wabpm.cpp)
     add_executable(test_modes tests/test_modes.cpp bpm/modes.cpp bpm/wabpm.cpp)
     add_executable(test_allset tests/test_allset.cpp bpm/modes.cpp bpm/wabpm.cpp)
+    # スカラー近軸カーネルは C (float _Complex) のため、テストも C で書く。
+    # MSVC の C コンパイラは C99 _Complex を扱えないため、カーネル本体と同様に
+    # C++ (std::complex<float>) としてコンパイルする (bpm_prototype.h が切替)
+    if(MSVC)
+        set_source_files_properties(tests/test_fdbpm.c PROPERTIES LANGUAGE CXX)
+    endif()
+    add_executable(test_fdbpm tests/test_fdbpm.c bpm/FDBPMpropagator.c)
+    target_link_libraries(test_fdbpm PRIVATE ${MATH_LIB})
     target_link_libraries(test_allset PRIVATE Eigen3::Eigen)
-    foreach(t test_wabpm test_modes test_allset)
+    foreach(t test_wabpm test_modes test_allset test_fdbpm)
         target_include_directories(${t} PRIVATE "${PROJECT_SOURCE_DIR}/include")
         if (OpenMP_CXX_FOUND)
             target_link_libraries(${t} PRIVATE OpenMP::OpenMP_CXX)
@@ -499,6 +518,55 @@ if (WITH_TESTS)
     add_test(NAME wabpm_unit COMMAND test_wabpm)
     add_test(NAME modes_unit COMMAND test_modes)
     add_test(NAME allset_unit COMMAND test_allset)
+    add_test(NAME fdbpm_unit COMMAND test_fdbpm)
+
+    # ONN 光活性化関数 (TPA + powersweep) の結合テスト:
+    # ソルバーを実際に走らせ、activation_curve.csv を平面波近似の解析解
+    # T = 1/(1 + beta*(P_in/A_eff)*L) と比較する (Python は標準ライブラリのみ)。
+    # obpm 本体を使うため WITH_MPI/WITH_CUDA 無効の CPU ビルドでのみ登録する。
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_FOUND AND TARGET obpm)
+        set(ONN_TEST_DIR "${CMAKE_BINARY_DIR}/onn_test")
+        file(MAKE_DIRECTORY "${ONN_TEST_DIR}")
+        add_test(NAME onn_activation_solver
+                 COMMAND $<TARGET_FILE:obpm> -n 2 -no-fdtd-out
+                         "${CMAKE_SOURCE_DIR}/data/sample/onn_activation.ofd"
+                 WORKING_DIRECTORY "${ONN_TEST_DIR}")
+        add_test(NAME onn_activation_check
+                 COMMAND ${Python3_EXECUTABLE}
+                         "${CMAKE_SOURCE_DIR}/tests/check_activation.py"
+                         --dir "${ONN_TEST_DIR}"
+                 WORKING_DIRECTORY "${ONN_TEST_DIR}")
+        # ソルバー実行 -> 検証 の順序を保証する
+        set_tests_properties(onn_activation_solver PROPERTIES FIXTURES_SETUP onn_run)
+        set_tests_properties(onn_activation_check  PROPERTIES FIXTURES_REQUIRED onn_run)
+
+        # 多モード重ね合わせ励振 (launch = mode 0 1) : モードビート長を
+        # 理論値 lambda/|neff0-neff1| と比較する
+        set(BEAT_TEST_DIR "${CMAKE_BINARY_DIR}/beat_test")
+        file(MAKE_DIRECTORY "${BEAT_TEST_DIR}")
+        add_test(NAME mode_beat_solver
+                 COMMAND $<TARGET_FILE:obpm> -n 2 -no-fdtd-out
+                         "${CMAKE_SOURCE_DIR}/data/fiber_mode_superposition.ofd"
+                 WORKING_DIRECTORY "${BEAT_TEST_DIR}")
+        add_test(NAME mode_beat_check
+                 COMMAND ${Python3_EXECUTABLE}
+                         "${CMAKE_SOURCE_DIR}/tests/check_modes_beat.py"
+                         --h5 "${BEAT_TEST_DIR}/time_series_data.h5"
+                         --log "${BEAT_TEST_DIR}/obpm.log"
+                 WORKING_DIRECTORY "${BEAT_TEST_DIR}")
+        set_tests_properties(mode_beat_solver PROPERTIES FIXTURES_SETUP beat_run)
+        set_tests_properties(mode_beat_check  PROPERTIES FIXTURES_REQUIRED beat_run)
+
+        # 波長掃引 (wlsweep) : 掃引結果が単独実行と厳密に一致することを確認する
+        # (スクリプト内でソルバーを 2 回実行する)
+        add_test(NAME wlsweep_check
+                 COMMAND ${Python3_EXECUTABLE}
+                         "${CMAKE_SOURCE_DIR}/tests/check_wlsweep.py"
+                         --bin $<TARGET_FILE:obpm>
+                         --ofd "${CMAKE_SOURCE_DIR}/data/spectrum_sweep.ofd"
+                         --workdir "${CMAKE_BINARY_DIR}/wlsweep_test")
+    endif()
 endif()
 
 #custom viewer

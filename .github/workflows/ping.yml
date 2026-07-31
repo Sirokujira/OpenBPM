@@ -1,0 +1,16 @@
+# Actions ランナー割り当ての診断用最小ワークフロー。
+# ci.yml が全ジョブ数秒で failure (runner_id=0, ステップ実行なし) になる事象が
+# コード起因かアカウント起因 (無料枠/課金) かを切り分ける。
+# echo 1 行でも失敗するならリポジトリ側では対処不能と確定する。
+name: Ping
+on:
+  push:
+    branches: [ "claude/**" ]
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "runner ok"

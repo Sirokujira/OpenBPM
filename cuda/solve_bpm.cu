@@ -77,6 +77,38 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
 	const double k0 = (2 * PI) / lambda;
 
+	// BPM で無効な入力キーワードの警告 (パースはされるが伝搬には反映されない)
+	{
+	    struct { int cond; const char *name; } ignored[] = {
+	        {IPlanewave != 0,          "planewave"},
+	        {NPoint > 0,               "point (S パラメータ出力はゼロになる)"},
+	        {NInductor > 0,            "load"},
+	        {rFeed != 0,               "rfeed"},
+	        {iABC == 1,                "abc = 1 (PML; BPM は独自の端部吸収体を使用)"},
+	        {PBCx || PBCy || PBCz,     "pbc"},
+	        // 非線形 TPA / パワー掃引は CPU 版 (obpm) のみ実装。CUDA 版では無視される
+	        // (サイレント無視を避けるため明示的に警告する)
+	        {NTpaB > 0,                "tpa (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
+	        {PowerSweep.npoints > 0,   "powersweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
+	        {BPM.wlsweep != 0,         "wlsweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
+	    };
+	    for (size_t n = 0; n < sizeof(ignored) / sizeof(ignored[0]); n++) {
+	        if (ignored[n].cond) {
+	            sprintf(str, "*** warning : keyword '%s' is ignored by the BPM solver.", ignored[n].name);
+	            if (io) fprintf(fp, "%s\n", str);
+	            fprintf(stdout, "%s\n", str);
+	        }
+	    }
+	    // CUDA 版は波長掃引に未対応 (先頭周波数のみ使用)。
+	    // wlsweep 指定時は上の一覧で専用の warning を出しているため二重に出さない。
+	    if (!BPM.wlsweep && ((NFreq2 > 1) || ((NFreq2 == 0) && (NFreq1 > 1)))) {
+	        sprintf(str, "*** warning : multiple frequencies are not swept by the BPM solver (only the first is used).");
+	        if (io) fprintf(fp, "%s\n", str);
+	        fprintf(stdout, "%s\n", str);
+	    }
+	}
+
+
 	// 材料毎の複素屈折率テーブル : n = sqrt(epsr - i*sigma/(omega*eps0))
 	// 損失を imag(n) > 0 として格納する (applyMultiplier の exp(d*imag(n)), d < 0 の規約)
 	floatcomplex *n_mat = (floatcomplex *)malloc(NMaterial * sizeof(floatcomplex));
@@ -218,6 +250,116 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			}
 		}
 		P->precisePower = power;
+	}
+
+	// モード励振 (launch = mode <m>) : 先頭スライスの屈折率分布から導波モードを
+	// 虚軸伝搬法 (bpm/modes.cpp) で求め、ガウシアンの代わりに励振する。
+	// 振幅は feed 電圧 (モードは L2 正規化済みのため入力電力 = volt^2)。
+	// beamtilt 指定時はガウシアンと同じ位相ランプをモード界にも掛ける。
+	double mode_neff = 0;   // HDF5 /metadata/mode_neff (モード励振時のみ > 0)
+	if (BPM.launchMode >= 0) {
+		const long Nm = (long)Nx * Ny;
+		std::complex<double> *n2m = new std::complex<double>[Nm];
+		double nmax = 0;
+		for (int iy = 0; iy < Ny; iy++) {
+		    for (int ix = 0; ix < Nx; ix++) {
+				const floatcomplex nmv = n_mat[iEx[NA(ix, iy, 0)]];
+				std::complex<double> nn(CREALF(nmv), -CIMAGF(nmv));
+				n2m[(long)Nx * iy + ix] = nn * nn;
+				if (nn.real() > nmax) nmax = nn.real();
+		    }
+		}
+		int launched = 0;
+		if (nmax > P->n_0) {
+		    /* 重ね合わせる最大モード番号まで求める */
+		    int m = 0;
+		    for (int n = 0; n < BPM.launchNModes; n++) {
+		        if (BPM.launchIdx[n] > m) m = BPM.launchIdx[n];
+		    }
+		    wabpm_params Wm;
+		    Wm.Nx = Nx;
+		    Wm.Ny = Ny;
+		    Wm.dx = Dx;
+		    Wm.dy = Dy;
+		    Wm.k0 = k0;
+		    Wm.n0 = P->n_0;
+		    Wm.wideangle = 0;
+		    Wm.pol = BPM.pol;
+		    // a*mu_max ~ 0.5 となる虚軸ステップ幅 (tests/test_modes.cpp と同じ)
+		    const double mu_max = k0 * k0 * ((nmax * nmax) - ((double)P->n_0 * P->n_0));
+		    Wm.dz = 2 * k0 * P->n_0 / mu_max;
+		    std::complex<double> *modes = new std::complex<double>[(size_t)(m + 1) * Nm];
+		    double *neff = new double[m + 1];
+		    const int nFound = wabpm_find_modes(&Wm, n2m, m + 1, 20000, 1e-10, modes, neff);
+		    if (nFound >= m + 1) {
+				const double volt = (NFeed > 0) ? Feed[0].volt : 1;
+				// 入射ビームの傾き (beamtilt =) : ガウシアンと同じ横方向波数の
+				// 位相ランプをモード界にも適用する (位相基準はビーム中心)
+				const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
+				const double kty = k0 * P->n_0 * sin(BPM.tilty * DTOR);
+				// モードの重ね合わせ s = sum_k coef_k * mode_{idx_k} を作り、
+				// L2 ノルムで正規化してから feed 電圧を掛ける。これにより
+				// モード数や係数に依らず入力電力は volt^2 に保たれる
+				// (係数は分岐比のみを決める)。
+				std::complex<double> *sup = new std::complex<double>[Nm];
+				for (long i = 0; i < Nm; i++) sup[i] = 0.0;
+				for (int n = 0; n < BPM.launchNModes; n++) {
+				    const std::complex<double> *src = &modes[(size_t)BPM.launchIdx[n] * Nm];
+				    const double c = BPM.launchCoef[n];
+				    for (long i = 0; i < Nm; i++) sup[i] += c * src[i];
+				}
+				double nrm2 = 0;
+				for (long i = 0; i < Nm; i++) nrm2 += std::norm(sup[i]);
+				const double scale = (nrm2 > 0) ? (volt / sqrt(nrm2)) : 0;
+
+				double power = 0;
+				for (long i = 0; i < Nm; i++) {
+				    const long ix = i % Nx;
+				    const long iy = i / Nx;
+				    const double ph = -(ktx * (Xc[ix] - xc0)) - (kty * (Yc[iy] - yc0));
+				    const std::complex<double> em = scale * sup[i]
+				                                  * std::complex<double>(cos(ph), sin(ph));
+				    floatcomplex e = {(float)em.real(), (float)em.imag()};
+				    P->E1[i] = e;
+				    power += std::norm(em);
+				}
+				delete[] sup;
+				P->precisePower = power;
+				mode_neff = neff[BPM.launchIdx[0]];   /* 代表値 : 先頭に指定したモード */
+				if (BPM.launchNModes == 1) {
+				    sprintf(str, "launch : mode %d, neff = %.6f (found %d)",
+				            BPM.launchIdx[0], neff[BPM.launchIdx[0]], nFound);
+				    if (io) fprintf(fp, "%s\n", str);
+				    fprintf(stdout, "%s\n", str);
+				}
+				else {
+				    int len = sprintf(str, "launch : superposition of %d modes (found %d) :",
+				                      BPM.launchNModes, nFound);
+				    for (int n = 0; n < BPM.launchNModes; n++) {
+				        len += sprintf(str + len, " %d(c=%g, neff=%.6f)",
+				                       BPM.launchIdx[n], BPM.launchCoef[n],
+				                       neff[BPM.launchIdx[n]]);
+				    }
+				    if (io) fprintf(fp, "%s\n", str);
+				    fprintf(stdout, "%s\n", str);
+				}
+				if ((BPM.tiltx != 0) || (BPM.tilty != 0)) {
+				    sprintf(str, "launch : beamtilt (%.3f, %.3f) [deg] applied to the mode field",
+				            BPM.tiltx, BPM.tilty);
+				    if (io) fprintf(fp, "%s\n", str);
+				    fprintf(stdout, "%s\n", str);
+				}
+				launched = 1;
+		    }
+		    delete[] modes;
+		    delete[] neff;
+		}
+		if (!launched) {
+		    sprintf(str, "*** warning : launch = mode %d: mode not found (no guided structure or not converged). Falling back to Gaussian.", BPM.launchMode);
+		    if (io) fprintf(fp, "%s\n", str);
+		    fprintf(stdout, "%s\n", str);
+		}
+		delete[] n2m;
 	}
 
 	P->EfieldPower = 0;
@@ -590,7 +732,9 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			{"frame_interval", &frame_interval_d},
 			{"grid_dx", &Dx},
 			{"grid_dy", &Dy},
-			{"grid_dz", &Dz}
+			{"grid_dz", &Dz},
+			// モード励振 (launch = mode) 時の実効屈折率。ガウシアン励振では 0
+			{"mode_neff", &mode_neff}
 		};
 		for (size_t i = 0; i < sizeof(bpm_metadata) / sizeof(bpm_metadata[0]); i++) {
 			dataspace_id = H5Screate(H5S_SCALAR);

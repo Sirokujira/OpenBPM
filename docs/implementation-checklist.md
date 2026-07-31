@@ -81,13 +81,19 @@ OpenBPM のコードベース調査により判明した「実装漏れ・未実
 
 ## テスト
 
-`-DWITH_TESTS=ON` で以下の単体テストがビルドされる (`ctest` で実行):
+`-DWITH_TESTS=ON` で以下の 9 テストがビルド/登録される (`ctest` で実行。
+結合テストは h5py/numpy が必要)。最新の一覧と検証内容は ReadMe.md の
+「テスト」節が正となる。
 
 | テスト | 対象 | 検証内容 |
 |---|---|---|
 | `test_wabpm` | `bpm/wabpm.cpp` | 回折 (近軸/広角)・エネルギー保存・吸収減衰・曲げ偏向・半ベクトル整合 |
 | `test_modes` | `bpm/modes.cpp` | LP01/LP11 実効屈折率 (分散方程式の厳密解と比較)・直交性 |
 | `test_allset` | `include/bpm/allset.hpp` | findModes / modeSuperposition / offsetField / tiltField |
+| `test_fdbpm` | `bpm/FDBPMpropagator.c` | スカラー近軸カーネルの回折・エネルギー保存・吸収・ビーム中心保持 |
+| `onn_activation_solver` / `_check` | TPA + powersweep | `activation_curve.csv` を解析解 `T = 1/(1+β(P/A_eff)L)` と比較 (±7%) |
+| `mode_beat_solver` / `_check` | `launch = mode <m1> <m2>` | 伝搬マップ重心のモードビート長を理論値 `λ/Δneff` と比較 (誤差 0.9%) |
+| `wlsweep_check` | `wlsweep = 1` | 掃引結果が最終波長の単独実行と完全一致することを確認 |
 
 ## 補足: 確認したが「対応不要」と判断した項目
 
