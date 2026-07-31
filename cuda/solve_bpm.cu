@@ -11,6 +11,8 @@ sol/solve_bpm.cpp の CUDA 版
 
 #include "hdf5.h"
 #define FILE_NAME "time_series_data.h5"
+// 光活性化関数曲線 (powersweep 指定時に出力)
+#define FN_activation "activation_curve.csv"
 
 #include "bpm/bpm_prototype.h"
 #include "bpm/wabpm.h"
@@ -100,6 +102,18 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			n_mat[m] = v;
 		}
 	}
+
+	// 材料毎の二光子吸収 (TPA) 係数テーブル [m/W]
+	// 入力 (tpa = <material id> <beta[cm/GW]>) から単位変換して格納する
+	//   1 cm/GW = 1e-11 m/W (例 : 424 cm/GW = 4.24e-9 m/W)
+	double *tpa_mat = (double *)malloc(NMaterial * sizeof(double));
+	for (int64_t m = 0; m < NMaterial; m++) {
+		tpa_mat[m] = 0;
+	}
+	for (int n = 0; n < NTpaB; n++) {
+		tpa_mat[TpaB[n].m] = TpaB[n].beta * 1e-11;
+	}
+	const int haveTpa = (NTpaB > 0);
 
 	// BPM パラメータ (BPM-MATLAB の FDBPM に対応)
 	struct parameters P_var;
@@ -361,12 +375,70 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		fprintf(stdout, "%s\n", str);
 	}
 
-	// TPA (tpa) / パワー掃引 (powersweep) は CUDA 版では未対応 :
-	// 指定されていても線形の単発計算になるため、明示的に警告を出す
-	if ((NTpaB > 0) || (PowerSweep.npoints > 0)) {
-		sprintf(str, "*** warning : tpa / powersweep are not supported in CUDA version (ignored). Use CPU version (obpm) instead.");
+	// ============================================================
+	// 非線形吸収 (TPA) / 入力パワー掃引 (ONN 光活性化関数) の準備
+	// CPU 版 sol/solve_bpm.cpp と同一の規約 :
+	//   - 物理スケーリング : 初期界を ∫∫|E|^2 dA = P_in [W] に正規化し、
+	//     |E|^2 がそのまま強度 I [W/m^2] になるようにする (dA = Dx*Dy)。
+	//     tpa / powersweep 未指定時は従来通り無次元の界のまま計算する (後方互換)。
+	//   - 実効断面積 A_eff = (∫|E|^2 dA)^2 / ∫|E|^4 dA を初期界から実計算する
+	// ============================================================
+	const int    sweep    = (PowerSweep.npoints > 0);
+	const int    nsweep   = sweep ? PowerSweep.npoints : 1;
+	const int    physcale = (sweep || haveTpa);   // 物理スケーリングの有無
+	const double E0rawpow = P->precisePower;      // 初期界の生の |E|^2 和 (面積要素なし)
+	floatcomplex *E0 = NULL;                      // 初期界の保存 (掃引毎の再初期化用)
+	double *sweepPin = NULL, *sweepPout = NULL;
+	// TPA 係数のスライス配列 (デバイスへ転送する)
+	float *betaSlice = haveTpa
+	    ? (float *)malloc((size_t)P->Nx * P->Ny * sizeof(float)) : NULL;
+	if (physcale) {
+		E0 = (floatcomplex *)malloc((size_t)P->Nx * P->Ny * sizeof(floatcomplex));
+		memcpy(E0, P->E1, (size_t)P->Nx * P->Ny * sizeof(floatcomplex));
+		sweepPin  = (double *)malloc(nsweep * sizeof(double));
+		sweepPout = (double *)malloc(nsweep * sizeof(double));
+		for (int n = 0; n < nsweep; n++) {
+			if (!sweep) {
+				sweepPin[n] = 1;  // tpa のみ指定時の既定入力パワー [W]
+			}
+			else if (nsweep == 1) {
+				sweepPin[n] = PowerSweep.pmin;
+			}
+			else if (PowerSweep.logscale) {
+				sweepPin[n] = PowerSweep.pmin *
+					pow(PowerSweep.pmax / PowerSweep.pmin, (double)n / (nsweep - 1));
+			}
+			else {
+				sweepPin[n] = PowerSweep.pmin +
+					((PowerSweep.pmax - PowerSweep.pmin) * n) / (nsweep - 1);
+			}
+			sweepPout[n] = 0;
+		}
+		// 実効断面積 (初期界から実計算。ガウシアンでは A_eff = pi*w0^2 に一致)
+		double sumI2 = 0;
+		for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+			const floatcomplex e = E0[i];
+			const double i2 = ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+			sumI2 += i2 * i2;
+		}
+		const double Aeff = (sumI2 > 0) ? (E0rawpow * E0rawpow / sumI2) * (Dx * Dy) : 0;
+		sprintf(str, "ONN: A_eff = %.6e [m^2] (from input field), L = %.6e [m]",
+				Aeff, Zn[Nz] - Zn[0]);
 		if (io) fprintf(fp, "%s\n", str);
 		fprintf(stdout, "%s\n", str);
+	}
+	if (haveTpa) {
+		for (int n = 0; n < NTpaB; n++) {
+			sprintf(str, "ONN: TPA material id = %d, beta = %g [cm/GW] = %g [m/W]",
+					(int)TpaB[n].m, TpaB[n].beta, tpa_mat[TpaB[n].m]);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
+		if (!sweep) {
+			sprintf(str, "ONN: no powersweep -> single run with P_in = %g [W]", sweepPin[0]);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
 	}
 
 	// 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
@@ -387,6 +459,27 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 
 	// HDF5ファイルの作成
 	file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+
+	// ============================================================
+	// 入力パワー掃引ループ (powersweep 未指定時は 1 回のみ実行)
+	// 各回 : 初期界を P_in [W] に正規化 -> z 伝搬 -> P_out を記録する。
+	// /field 出力 (Ixz/Efinal/frames) は最終掃引点の結果になる。
+	// ============================================================
+	for (int isweep = 0; isweep < nsweep; isweep++) {
+
+	// 物理スケーリング時 : 初期界を ∫∫|E|^2 dA = P_in になるよう再設定する
+	if (physcale) {
+		const double Pin = sweepPin[isweep];
+		const float s = (float)sqrt(Pin / (E0rawpow * Dx * Dy));
+		for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+			P->E1[i] = E0[i] * s;
+		}
+		P->precisePower = E0rawpow * (double)s * s;
+		P->EfieldPower = 0;
+		P->precisePowerDiff = 0;
+		sprintf(str, "sweep %d / %d : P_in = %g [W]", isweep + 1, nsweep, Pin);
+		fprintf(stdout, "%s\n", str);
+	}
 
 	if (BPM.pol || BPM.wideangle) {
 		// ============================================================
@@ -486,6 +579,16 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			// 1 ステップ伝搬 (+ 端部吸収体, wabpm_gpu_step 内で適用)
 			wabpm_gpu_step(G, n2);
 
+			// TPA (二光子吸収) : E *= exp(-(beta/2)*I*dz) をデバイス上で適用
+			if (haveTpa) {
+				for (int iy = 0; iy < Ny; iy++) {
+					for (int ix = 0; ix < Nx; ix++) {
+						betaSlice[(long)(Nx * iy) + ix] = (float)tpa_mat[iEx[NA(ix, iy, iz)]];
+					}
+				}
+				wabpm_gpu_tpa(G, betaSlice, Dz);
+			}
+
 			// 中心行の強度を記録
 			wabpm_gpu_get_row(G, P->Ny / 2, Ed);  // Ed の先頭 Nx 要素を一時利用
 			for (long ix = 0; ix < Nx; ix++) {
@@ -536,6 +639,18 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	CUDA_CHECK(cudaOccupancyMaxPotentialBlockSize(&nBlocks, &temp, &substep1a, 0, 0));
 	dim3 blockDims(TILE_DIM, TILE_DIM, 1);
 
+	// TPA 用のデバイスバッファ (beta スライスと電力簿記の集計)
+	// applyTPA は 1 次元のグリッドストライドループのため 1D ブロックで起動する
+	// (2D ブロックだと threadIdx.y 方向のスレッドが同一要素を重複更新してしまう)
+	float  *d_beta = NULL;
+	double *d_sums = NULL;
+	const int tpaTpb = 256;
+	const int tpaNb = (int)((((long)P->Nx * P->Ny) + tpaTpb - 1) / tpaTpb);
+	if (haveTpa) {
+		CUDA_CHECK(cudaMalloc(&d_beta, (size_t)P->Nx * P->Ny * sizeof(float)));
+		CUDA_CHECK(cudaMalloc(&d_sums, 2 * sizeof(double)));
+	}
+
 	// BPM は時間反復ではなく Z 軸方向に 1 回伝搬する
 	for (long iz = P->iz_start; iz < P->iz_end; iz++) {
 		sprintf(str, "step iz : %ld / %ld", iz + 1, (long)Nz);
@@ -551,6 +666,23 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		applyMultiplier<<<nBlocks, blockDims>>>(P_dev, iz, D_dev); // xy -> xy
 
 		CUDA_CHECK(cudaDeviceSynchronize()); // Wait until all kernels have finished
+
+		// TPA (二光子吸収) : E2 *= exp(-(beta/2)*I*dz)
+		// 次ステップの fieldCorrection が TPA 減衰を打ち消さないよう、
+		// 電力簿記 precisePower も同率で減らす (CPU 版と同一の手順)
+		if (haveTpa) {
+			updatePrecisePower<<<1, 1>>>(P_dev);  // 係留中の precisePowerDiff を先に確定する
+			for (int iy = 0; iy < P->Ny; iy++) {
+				for (int ix = 0; ix < P->Nx; ix++) {
+					betaSlice[(long)(P->Nx * iy) + ix] = (float)tpa_mat[iEx[NA(ix, iy, iz)]];
+				}
+			}
+			CUDA_CHECK(cudaMemcpy(d_beta, betaSlice, (size_t)P->Nx * P->Ny * sizeof(float), cudaMemcpyHostToDevice));
+			CUDA_CHECK(cudaMemset(d_sums, 0, 2 * sizeof(double)));
+			applyTPA<<<tpaNb, tpaTpb>>>(P_dev, d_beta, Dz, d_sums);
+			scalePrecisePowerByTPA<<<1, 1>>>(P_dev, d_sums);
+			CUDA_CHECK(cudaDeviceSynchronize());
+		}
 
 		// 中心行の強度を記録 (このステップの結果はデバイス側 E2 にある)
 		{
@@ -585,6 +717,46 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	// 最終電界 (デバイス側 E2) と屈折率分布を Efinal / n_out へ回収し、デバイスメモリを解放する
 	CUDA_CHECK(cudaDeviceSynchronize());
 	retrieveAndFreeDeviceStructs(P, P_dev, D, D_dev);
+	if (haveTpa) {
+		CUDA_CHECK(cudaFree(d_beta));
+		CUDA_CHECK(cudaFree(d_sums));
+	}
+	}
+
+	// 物理スケーリング時 : 出力パワー P_out = ∫∫|E_end|^2 dA [W] を記録する
+	if (physcale) {
+		double rawpow = 0;
+		for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+			const floatcomplex e = P->Efinal[i];
+			rawpow += ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+		}
+		sweepPout[isweep] = rawpow * Dx * Dy;
+		sprintf(str, "ONN: P_in=%g W -> P_out=%g W (T=%g)",
+				sweepPin[isweep], sweepPout[isweep],
+				(sweepPin[isweep] > 0) ? (sweepPout[isweep] / sweepPin[isweep]) : 0);
+		if (io) {
+			fprintf(fp, "%s\n", str);
+			fflush(fp);
+		}
+		fprintf(stdout, "%s\n", str);
+	}
+
+	}  // 掃引ループ (isweep) 終了
+
+	// 光活性化関数曲線 P_out(P_in) の CSV 出力
+	if (sweep) {
+		FILE *fcsv = fopen(FN_activation, "w");
+		if (fcsv != NULL) {
+			fprintf(fcsv, "P_in_W,P_out_W,transmission\n");
+			for (int n = 0; n < nsweep; n++) {
+				fprintf(fcsv, "%.6e,%.6e,%.6e\n", sweepPin[n], sweepPout[n],
+						(sweepPin[n] > 0) ? (sweepPout[n] / sweepPin[n]) : 0);
+			}
+			fclose(fcsv);
+			sprintf(str, "ONN: activation curve -> %s (%d points)", FN_activation, nsweep);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
 	}
 
 	// result
@@ -854,6 +1026,11 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	free(Ixz);
 	free(Erow);
 	if (Frames) free(Frames);
+	free(tpa_mat);
+	if (betaSlice != NULL) free(betaSlice);
+	if (E0 != NULL) free(E0);
+	if (sweepPin != NULL) free(sweepPin);
+	if (sweepPout != NULL) free(sweepPout);
 	if (modeFields) delete[] modeFields;
 	if (modeNeff) delete[] modeNeff;
 }

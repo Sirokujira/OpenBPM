@@ -86,14 +86,28 @@ CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する
 
 ## 高優先度
 
-- [ ] **CUDA 版が `tpa` / `powersweep` 未対応** (⚠ サイレント無視は解消済み)
-  - 場所: `cuda/solve_bpm.cu`
-  - 対応状況:
-    1. ✅【小】実行時警告を追加済み (「tpa / powersweep are not supported in CUDA version」
-       を表示して線形の単発計算にフォールバック)。ReadMe も更新。CUDA 12.0 でコンパイル検証済み
-    2. 【大・未対応】TPA 減衰カーネル (E *= exp(-β/2·|E|²·Δz), 要素毎) を `bpm/wabpm.cu` と
-       近軸 CUDA パスに実装し、掃引ループを移植する (GPU 実機がないため実行検証は不可、
-       コンパイル検証のみ可能。着手前に要方針判断)
+- [x] **CUDA 版が `tpa` / `powersweep` 未対応** ✅ 対応済み (⚠ 実機検証のみ未実施)
+  - 場所: `cuda/solve_bpm.cu` / `bpm/FDBPMpropagator.cu` / `bpm/wabpm.cu`
+  - 対応内容:
+    1. 実行時警告 (サイレント無視の解消) — 先行対応済み。本対応で警告は不要になり削除
+    2. TPA カーネルと掃引ループを実装し、CPU 版と同等の機能に到達:
+       - 近軸: `applyTPA` (要素毎の `E *= exp(-β/2·|E|²·Δz)` + 電力和の二重精度
+         atomicAdd による集計) と `scalePrecisePowerByTPA` (電力簿記 `precisePower` を
+         同率で補正し、次ステップの `fieldCorrection` が TPA 減衰を打ち消すのを防ぐ)
+       - 拡張 (広角/半ベクトル): `bpm/wabpm.cu` に `k_tpa` / `wabpm_gpu_tpa` を追加
+       - ホスト側: 掃引ループ・物理スケーリング・A_eff 算出・`activation_curve.csv` 出力を
+         CPU 版から移植 (掃引毎に `createDeviceStructs`/`retrieveAndFreeDeviceStructs` を
+         対で呼び、初期界を再スケールする)
+  - 検証状況 (**この開発環境に GPU がないため実行検証は未実施**):
+    - CUDA 12.0 でのコンパイル検証 ✅
+    - 移植したホスト側ロジック (掃引点生成 / A_eff / P_out 記録 / CSV 出力) が
+      CPU 版と**文字列レベルで一致**することを機械的に照合 ✅
+    - TPA 式の精度を CPU と揃えた (倍精度で `exp` を評価してから float 化) ✅
+    - `applyTPA` は 1 次元グリッドストライドのため 1D ブロックで起動する
+      (2D ブロックだと `threadIdx.y` 方向のスレッドが同一要素を重複更新する) ✅
+    - ⚠ **未実施**: GPU 実機での実行と CPU 版との数値一致確認。実機入手時に
+      `data/sample/onn_activation.ofd` を両版で実行し `activation_curve.csv` を
+      比較すること (低優先度項目「GPU 実機実行検証」と併せて対応)
 
 - [x] **CI が単体テストを実行していない** ✅ 対応済み
   - 場所: `.github/workflows/ci.yml`
@@ -103,12 +117,12 @@ CI (Linux/macOS/Windows, PR #3/#5/#7) が追加された現行 main に対する
 
 ## 中優先度
 
-- [ ] **MPI 版は BPM 未対応 (FDTD ソルバのみ)**
+- [x] **MPI 版は BPM 未対応 (FDTD ソルバのみ)** ✅ 「FDTD のみ」と明記で解決
   - 場所: `src/mpi_Main.c` (`solve()` のみ呼び出し、`solve_bpm` への分岐なし)、`mpi/`
-  - 現状: `-DWITH_MPI=ON` でビルドされる MPI 版は OpenFDTD 由来の時間領域ソルバで、
-    BPM 伝搬は実行できない。
-  - 対応案: ADI の領域分割 (行/列方向の転置通信) が必要で規模が大きい。
-    需要の有無を判断のうえ、対応しない場合は ReadMe に「MPI 版は FDTD のみ」と明記する。
+  - 判断: BPM の ADI は z 方向に逐次で、MPI 領域分割には転置通信が必要となり
+    費用対効果が低い。実装せず ReadMe に「MPI 版は FDTD のみ、BPM の並列化は
+    OpenMP (CPU 版) / CUDA 版を使用」と理由付きで明記した (第 6 回後の対応)。
+    将来需要が生じたら再検討する。
 
 - [x] **TPA の解析解との数値回帰テストがない** ✅ 対応済み
   - 場所: `.github/workflows/ci.yml` / `tools/check_activation.sh` (新規)
@@ -250,15 +264,15 @@ main に新規変更なし、マーカー走査 0 件。E2E 検証 (ONN/回折/�
 
 | # | 項目 | 優先度 | 規模 |
 |---|---|---|---|
-| 1 | CUDA 版の TPA/掃引フル実装 (警告は対応済み) | 中 | 大 (要方針判断) |
-| 2 | テーパ/ツイストの公開 (カーネル対応済み) | 中 | 中 |
-| 3 | MPI 版の BPM 対応 or「FDTD のみ」と明記 | 中 | 大 / 小 |
-| 4 | GPU 実機での実行検証 | 低 | - (環境要因) |
+| 1 | ~~CUDA 版の TPA/掃引フル実装~~ | - | - | ✅ 対応済み (実機検証のみ #4 に集約) |
+| 2 | ~~テーパ/ツイストの公開~~ | - | - | ✅ 対応済み |
+| 3 | ~~MPI 版の BPM 対応 or 明記~~ | - | - | ✅ 「FDTD のみ」と明記で解決 |
+| 4 | GPU 実機での実行検証 (TPA/掃引・テーパ/ツイスト含む) | 低 | - (環境要因) |
 | 5 | obpm_post の `/field/frames` 対応 | 低 | 小 |
-| 6 | モード形状 (`/modes`) の可視化 (新規) | 低 | 小 |
+| 6 | ~~モード形状 (`/modes`) の可視化~~ | - | - | ✅ 対応済み |
 | 7 | 半ベクトルモードの随伴直交化 | 低 | 中 |
 | 8 | 対称境界 (x/ySymmetry) の公開 | 低 | 小 |
-| 9 | Windows CI のテストカバレッジ拡充 | 低 | 小 |
+| 9 | ~~Windows CI のテストカバレッジ拡充~~ | - | - | ✅ 対応済み |
 
 ---
 

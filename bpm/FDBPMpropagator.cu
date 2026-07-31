@@ -274,6 +274,38 @@ P->precisePower += P->precisePowerDiff;
 P->precisePowerDiff = 0;
 }
 
+// 二光子吸収 (TPA) : E2 *= exp(-(beta/2)*I*dz), I = |E2|^2 [W/m^2]
+// (CPU 版 sol/solve_bpm.cpp と同一。物理スケーリング済みの界を仮定し、
+//  強度の減衰率 alpha = beta*I に対し界には alpha/2 を適用する)
+// sums[0] に適用前、sums[1] に適用後の電力和を積算する (電力簿記の補正用)。
+__global__
+void applyTPA(struct parameters *P, const float *beta, double dz, double *sums) {
+  double pb = 0, pa = 0;
+  for(long i = blockIdx.x*(long)blockDim.x + threadIdx.x; i < P->Nx*P->Ny; i += gridDim.x*(long)blockDim.x) {
+    const floatcomplex e = P->E2[i];
+    const double i2 = ((double)CREALF(e)*CREALF(e)) + ((double)CIMAGF(e)*CIMAGF(e));
+    const double b = beta[i];
+    pb += i2;
+    if(b > 0) {
+      // CPU 版 (sol/solve_bpm.cpp) と同一 : 倍精度で exp を評価してから float 化する
+      const float g = (float)exp(-0.5*b*i2*dz);
+      P->E2[i] = e*g;
+      pa += i2*(double)g*g;
+    } else {
+      pa += i2;
+    }
+  }
+  atomicAdd(&sums[0], pb);
+  atomicAdd(&sums[1], pa);
+}
+
+// TPA による電力簿記の補正 : precisePower *= (適用後 / 適用前)
+// (次ステップの fieldCorrection が TPA 減衰を打ち消さないようにする)
+__global__
+void scalePrecisePowerByTPA(struct parameters *P, const double *sums) {
+  if(sums[0] > 0) P->precisePower *= sums[1]/sums[0];
+}
+
 __global__
 void swapEPointers(struct parameters *P, long iz) {
   P->EfieldPower = 0;

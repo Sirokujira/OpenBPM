@@ -201,8 +201,11 @@ ctest --test-dir build --output-on-failure
   解析解との差が拡大します (平面波近似の限界)。
 - `/field` 出力 (Ixz/Efinal/frames) は最終掃引点 (最大パワー) の結果です。
 - `wideangle` / `polarization` の一般化伝搬エンジンとも併用できます。
-  CUDA 版 (`obpm_cuda`) は現状 `tpa` / `powersweep` に未対応です
-  (指定時は警告を表示して線形の単発計算になります。CPU 版 `obpm` を使用してください)。
+- CUDA 版 (`obpm_cuda`) も `tpa` / `powersweep` に対応しています
+  (近軸パスは TPA カーネル + 電力簿記の補正、拡張パスは `bpm/wabpm.cu` の TPA カーネル。
+  掃引ループ・物理スケーリング・A_eff・CSV 出力はホスト側で CPU 版と同一処理)。
+  **ビルドは CUDA 12.0 で確認済みですが、GPU 実機での実行検証は未実施です**
+  (数値検証済みなのは CPU 版。実機がある場合は CPU 版との一致確認を推奨)。
 
 ## CI / Release
 

@@ -62,6 +62,8 @@ extern struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
                                           const wabpm_cplx *E_host, const float *mult_host);
 // 1 ステップ伝搬 (n2_host : このスライスの複素比誘電率) + 吸収体適用
 extern void wabpm_gpu_step(struct wabpm_gpu *G, const wabpm_cplx *n2_host);
+// TPA を 1 ステップ分適用 (beta_host : このスライスの TPA 係数 [m/W], Nx*Ny)
+extern void wabpm_gpu_tpa(struct wabpm_gpu *G, const float *beta_host, double dz);
 // 行 iy の電界をホストへ取得 (Ixz 記録用)
 extern void wabpm_gpu_get_row(struct wabpm_gpu *G, int iy, wabpm_cplx *row_host);
 // 全電界をホストへ取得

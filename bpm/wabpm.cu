@@ -48,6 +48,7 @@ struct wabpm_gpu {
 	cplxd *d_n2;    // 複素比誘電率 (スライス)
 	cplxd *d_cw;    // Thomas 法の上対角バッファ (Nx*Ny)
 	float *d_mult;  // 端部吸収体
+	float *d_beta;  // TPA 係数 (スライス) [m/W]
 	size_t N;
 };
 
@@ -171,6 +172,20 @@ static void k_multiplier(struct wabpm_dev D, cplxd *E, const float *mult)
 	}
 }
 
+// 二光子吸収 (TPA) : E *= exp(-(beta/2)*I*dz), I = |E|^2 [W/m^2]
+// (物理スケーリング済みの界を仮定。強度の減衰率 alpha = beta*I に対し界には alpha/2)
+__global__
+static void k_tpa(struct wabpm_dev D, cplxd *E, const float *beta, double dz)
+{
+	const long N = (long)D.Nx * D.Ny;
+	for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < N; i += gridDim.x * (long)blockDim.x) {
+		const double b = beta[i];
+		if (b > 0) {
+			E[i] *= exp(-0.5 * b * thrust::norm(E[i]) * dz);
+		}
+	}
+}
+
 struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
                                    const wabpm_cplx *E_host, const float *mult_host)
 {
@@ -199,10 +214,22 @@ struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
 	WABPM_CHECK(cudaMalloc(&G->d_n2,   G->N * sizeof(cplxd)));
 	WABPM_CHECK(cudaMalloc(&G->d_cw,   G->N * sizeof(cplxd)));
 	WABPM_CHECK(cudaMalloc(&G->d_mult, G->N * sizeof(float)));
+	WABPM_CHECK(cudaMalloc(&G->d_beta, G->N * sizeof(float)));
 	WABPM_CHECK(cudaMemcpy(G->d_E,    E_host,    G->N * sizeof(cplxd), cudaMemcpyHostToDevice));
 	WABPM_CHECK(cudaMemcpy(G->d_mult, mult_host, G->N * sizeof(float), cudaMemcpyHostToDevice));
 
 	return G;
+}
+
+// TPA を 1 ステップ分適用する (beta_host : このスライスの TPA 係数 [m/W], Nx*Ny)
+void wabpm_gpu_tpa(struct wabpm_gpu *G, const float *beta_host, double dz)
+{
+	WABPM_CHECK(cudaMemcpy(G->d_beta, beta_host, G->N * sizeof(float), cudaMemcpyHostToDevice));
+	const int tpb = 256;
+	const int nbe = (int)((G->N + tpb - 1) / tpb);
+	k_tpa <<<nbe, tpb>>>(G->D, G->d_E, G->d_beta, dz);
+	WABPM_CHECK(cudaGetLastError());
+	WABPM_CHECK(cudaDeviceSynchronize());
 }
 
 void wabpm_gpu_step(struct wabpm_gpu *G, const wabpm_cplx *n2_host)
@@ -242,5 +269,6 @@ void wabpm_gpu_destroy(struct wabpm_gpu *G)
 	cudaFree(G->d_n2);
 	cudaFree(G->d_cw);
 	cudaFree(G->d_mult);
+	cudaFree(G->d_beta);
 	free(G);
 }
