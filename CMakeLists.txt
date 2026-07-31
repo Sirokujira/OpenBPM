@@ -499,7 +499,12 @@ if (WITH_TESTS)
     add_executable(test_wabpm tests/test_wabpm.cpp bpm/wabpm.cpp)
     add_executable(test_modes tests/test_modes.cpp bpm/modes.cpp bpm/wabpm.cpp)
     add_executable(test_allset tests/test_allset.cpp bpm/modes.cpp bpm/wabpm.cpp)
-    # スカラー近軸カーネルは C (float _Complex) のため、テストも C で書く
+    # スカラー近軸カーネルは C (float _Complex) のため、テストも C で書く。
+    # MSVC の C コンパイラは C99 _Complex を扱えないため、カーネル本体と同様に
+    # C++ (std::complex<float>) としてコンパイルする (bpm_prototype.h が切替)
+    if(MSVC)
+        set_source_files_properties(tests/test_fdbpm.c PROPERTIES LANGUAGE CXX)
+    endif()
     add_executable(test_fdbpm tests/test_fdbpm.c bpm/FDBPMpropagator.c)
     target_link_libraries(test_fdbpm PRIVATE ${MATH_LIB})
     target_link_libraries(test_allset PRIVATE Eigen3::Eigen)
