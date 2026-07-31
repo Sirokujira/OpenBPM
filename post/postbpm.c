@@ -44,6 +44,46 @@ static double *read2d(hid_t file, const char *path, hsize_t dims[2])
 	return buf;
 }
 
+/* 3次元データセットを読む (呼び出し側で free)。失敗時 NULL */
+static double *read3d(hid_t file, const char *path, hsize_t dims[3])
+{
+	if (H5Lexists(file, path, H5P_DEFAULT) <= 0) return NULL;
+	hid_t dset = H5Dopen(file, path, H5P_DEFAULT);
+	if (dset < 0) return NULL;
+	hid_t space = H5Dget_space(dset);
+	if (H5Sget_simple_extent_ndims(space) != 3) {
+		H5Sclose(space);
+		H5Dclose(dset);
+		return NULL;
+	}
+	H5Sget_simple_extent_dims(space, dims, NULL);
+	double *buf = (double *)malloc((size_t)dims[0] * dims[1] * dims[2] * sizeof(double));
+	if (buf != NULL) {
+		if (H5Dread(dset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL,
+		            H5P_DEFAULT, buf) < 0) {
+			free(buf);
+			buf = NULL;
+		}
+	}
+	H5Sclose(space);
+	H5Dclose(dset);
+	return buf;
+}
+
+/* スカラーのメタデータを読む (無ければ def を返す) */
+static double readScalar(hid_t file, const char *path, double def)
+{
+	if (H5Lexists(file, path, H5P_DEFAULT) <= 0) return def;
+	hid_t dset = H5Dopen(file, path, H5P_DEFAULT);
+	if (dset < 0) return def;
+	double v = def;
+	if (H5Dread(dset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &v) < 0) {
+		v = def;
+	}
+	H5Dclose(dset);
+	return v;
+}
+
 /* dB スケールの等高線ページを1枚描く (data は行 = 縦軸, 列 = 横軸) */
 static void contourPage(const double *data, int rows, int cols,
 	const char *title, const char *xlabel, const char *ylabel,
@@ -178,6 +218,36 @@ int plot2dBpm(void)
 	}
 	free(er);
 	free(ei);
+
+	/* ── 伝搬スナップショット frames (nframes x Ny x Nx) ── */
+	/* ソルバ入力で frames = <interval> を指定した場合のみ存在する。   */
+	/* 1 フレーム = 1 ページとし、各ページのタイトルに z 位置を入れる。*/
+	hsize_t fd[3];
+	double *frames = read3d(file, "/field/frames", fd);
+	if (frames != NULL) {
+		const int nf = (int)fd[0], ny = (int)fd[1], nx = (int)fd[2];
+		const double interval = readScalar(file, "/metadata/frame_interval", 0);
+		const double dz = readScalar(file, "/metadata/grid_dz", 0);
+		const double x0 = (nx == Nx) ? Xn[0] : 0;
+		const double x1 = (nx == Nx) ? Xn[Nx] : nx;
+		const double y0 = (ny == Ny) ? Yn[0] : 0;
+		const double y1 = (ny == Ny) ? Yn[Ny] : ny;
+		for (int n = 0; n < nf; n++) {
+			char title[BUFSIZ];
+			if ((interval > 0) && (dz > 0)) {
+				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  z = %.6e [m]",
+				        Zn[0] + (n * interval * dz));
+			}
+			else {
+				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  frame %d / %d", n + 1, nf);
+			}
+			contourPage(&frames[(size_t)n * ny * nx], ny, nx, title,
+			            "x[m]", "y[m]", x0, x1, y0, y1);
+			pages++;
+		}
+		printf("BPM: snapshots %d frames (%d x %d)\n", nf, ny, nx);
+		free(frames);
+	}
 
 	H5Fclose(file);
 	return pages;

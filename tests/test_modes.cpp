@@ -96,6 +96,12 @@ static std::vector<cplx> fiber_n2(int Nx, int Ny, double dx, double dy,
     return n2;
 }
 
+// 中心化座標 (グリッド中心を原点)
+static inline double coordm(long i, long N, double d)
+{
+    return (static_cast<double>(i) - (N - 1) / 2.0) * d;
+}
+
 static wabpm_params mode_params(int Nx, int Ny, double dx, double dy,
                                 double lambda, double n0, double nmax)
 {
@@ -183,11 +189,71 @@ static void test_fmf_lp01_lp11()
                "max |<m_p, m_q>| = " + std::to_string(maxovl));
 }
 
+// 高コントラスト矩形コアで複数モードが確実に見つかること (回帰テスト)
+//
+// 収束判定を Rayleigh 商から算出した neff で行い、非導波状態を 0 にクランプすると、
+// 2 回連続で 0 に丸められた時点で「収束」と誤判定し、モード 2 以降の探索が
+// 即座に打ち切られる。この退行を検出するため、モード数と neff の降順性を確認する。
+// (判定はクランプしない生の v = n0^2 + mu/k0^2 で行うこと)
+static void test_highcontrast_multimode()
+{
+    const double lambda = 1.55e-6;
+    const double ncore = 2.0, nclad = 1.0;
+    const int Nx = 120, Ny = 120;
+    const double dx = 6.0e-6 / Nx, dy = dx;
+    const double ax = 1.2e-6, ay = 0.9e-6;   // 矩形コアの半幅
+    const long N = (long)Nx * Ny;
+
+    wabpm_params W = mode_params(Nx, Ny, dx, dy, lambda, nclad, ncore);
+    std::vector<cplx> n2((size_t)N);
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double x = coordm(ix, Nx, dx);
+            const double y = coordm(iy, Ny, dy);
+            const double n = (std::fabs(x) <= ax && std::fabs(y) <= ay) ? ncore : nclad;
+            n2[ix + (long)iy * Nx] = cplx(n * n, 0.0);
+        }
+    }
+
+    const int nModes = 4;
+    std::vector<cplx> modes((size_t)nModes * N);
+    std::vector<double> neff(nModes);
+    const int nFound = wabpm_find_modes(&W, n2.data(), nModes, 60000, 1e-12,
+                                        modes.data(), neff.data());
+
+    check_true("multimode: found 4 modes", nFound == 4,
+               "nFound = " + std::to_string(nFound));
+    if (nFound < 2) return;
+    // 全モードが導波条件を満たし neff は降順
+    bool ok = true;
+    for (int m = 0; m < nFound; m++) {
+        if (!(neff[m] > nclad && neff[m] < ncore)) ok = false;
+        if (m > 0 && neff[m] > neff[m - 1] + 1e-9) ok = false;
+    }
+    check_true("multimode: neff guided and descending", ok,
+               "neff[0] = " + std::to_string(neff[0]) +
+               ", neff[" + std::to_string(nFound - 1) + "] = " + std::to_string(neff[nFound - 1]));
+    // 直交性
+    double maxovl = 0.0;
+    for (int p = 0; p < nFound; p++) {
+        for (int q = p + 1; q < nFound; q++) {
+            cplx s = 0.0;
+            for (long i = 0; i < N; i++) {
+                s += std::conj(modes[(size_t)p * N + i]) * modes[(size_t)q * N + i];
+            }
+            maxovl = std::max(maxovl, std::abs(s));
+        }
+    }
+    check_true("multimode: orthogonality", maxovl < 1e-6,
+               "max |<m_p, m_q>| = " + std::to_string(maxovl));
+}
+
 int main()
 {
     std::printf("=== wabpm_find_modes unit tests ===\n");
     test_smf_lp01();
     test_fmf_lp01_lp11();
+    test_highcontrast_multimode();
 
     std::printf("\n%d failure(s).\n", g_failures);
     return g_failures == 0 ? 0 : 1;
