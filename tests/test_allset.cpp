@@ -12,6 +12,7 @@ include/bpm/allset.hpp (BPM-MATLAB 互換の P_Struct API) の単体テスト。
 */
 
 #include "bpm/allset.hpp"
+#include "bessel_ref.h"   // std::cyl_bessel_j/k は libc++ 未実装のため自前実装を使用
 
 #include <cmath>
 #include <cstdio>
@@ -43,8 +44,8 @@ static double exact_lp01_neff(double a, double ncore, double nclad, double lambd
     for (int it = 0; it < 200; it++) {
         const double u = 0.5 * (lo + hi);
         const double w = std::sqrt(V * V - u * u);
-        const double f = u * std::cyl_bessel_j(1, u) / std::cyl_bessel_j(0, u)
-                       - w * std::cyl_bessel_k(1, w) / std::cyl_bessel_k(0, w);
+        const double f = u * bessel_ref_j(1, u) / bessel_ref_j(0, u)
+                       - w * bessel_ref_k(1, w) / bessel_ref_k(0, w);
         if (f > 0) hi = u; else lo = u;
     }
     const double u = 0.5 * (lo + hi);
