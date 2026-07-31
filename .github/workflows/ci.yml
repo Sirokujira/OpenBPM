@@ -133,10 +133,14 @@ jobs:
       - name: Install dependencies
         run: brew install libomp hdf5 eigen
 
+      # Python3_EXECUTABLE は pip install と同じ PATH の python3 に固定する
+      # (FindPython3 が別のインタプリタを拾うと ctest で h5py が import 不能になる。
+      #  Windows で実際に発生したのと同じ問題の予防)
       - name: Configure (CPU only)
         run: |
           OMP="$(brew --prefix libomp)"
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON \
+            -DPython3_EXECUTABLE="$(command -v python3)" \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
             -DOpenMP_C_LIB_NAMES=omp \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
@@ -146,9 +150,11 @@ jobs:
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
 
-      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う
+      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う。
+      # macOS ランナーの python3 は PEP 668 (externally-managed) で pip install を
+      # 拒否するため --break-system-packages を付ける (使い捨ての CI 環境なので可)
       - name: Install test dependencies
-        run: python3 -m pip install --upgrade h5py numpy
+        run: python3 -m pip install --break-system-packages --upgrade h5py numpy
 
       - name: Unit tests (解析解との比較検証)
         run: ctest --test-dir build --output-on-failure
