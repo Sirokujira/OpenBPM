@@ -101,6 +101,7 @@ static wabpm_params make_params(int Nx, int Ny, double dx, double dy, double dz,
     W.dx = dx; W.dy = dy; W.dz = dz;
     W.k0 = k0; W.n0 = n0;
     W.wideangle = wideangle; W.pol = pol;
+    W.symx = 0; W.symy = 0;
     return W;
 }
 

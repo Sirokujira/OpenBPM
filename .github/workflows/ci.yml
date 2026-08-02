@@ -85,6 +85,18 @@ jobs:
                print "taper/twist OK: output power = " p; ok = 1 }
                END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
 
+      # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になることを判定する
+      - name: Smoke test — symmetry boundary
+        run: |
+          mkdir -p /tmp/smoke-sym && cp data/sample/fiber_symmetry.ofd /tmp/smoke-sym/
+          cd /tmp/smoke-sym
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 fiber_symmetry.ofd
+          grep -q "normal end" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 155.0 || p > 157.5) { print "FAIL: output power " p " out of [155.0,157.5]"; exit 1 }
+               print "symmetry OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -195,6 +207,18 @@ jobs:
           awk '/output power/ { p = $(NF-1) + 0
                if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
                print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
+      # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になることを判定する
+      - name: Smoke test — symmetry boundary
+        run: |
+          mkdir -p /tmp/smoke-sym && cp data/sample/fiber_symmetry.ofd /tmp/smoke-sym/
+          cd /tmp/smoke-sym
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 fiber_symmetry.ofd
+          grep -q "normal end" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 155.0 || p > 157.5) { print "FAIL: output power " p " out of [155.0,157.5]"; exit 1 }
+               print "symmetry OK: output power = " p; ok = 1 }
                END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
 
       - name: Upload binaries (artifact)
@@ -319,6 +343,15 @@ jobs:
           awk '/output power/ { p = $(NF-1) + 0
                if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
                print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+          # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になること
+          mkdir -p ../smoke-sym && cd ../smoke-sym
+          cp ../data/sample/fiber_symmetry.ofd .
+          ../bin/obpm.exe -n 2 fiber_symmetry.ofd
+          grep -q "normal end" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 155.0 || p > 157.5) { print "FAIL: output power " p " out of range"; exit 1 }
+               print "symmetry OK: output power = " p; ok = 1 }
                END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
 
       - name: Upload binaries (artifact)

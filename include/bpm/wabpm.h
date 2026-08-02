@@ -21,6 +21,10 @@ struct wabpm_params {
 	double n0;           // 参照屈折率
 	int    wideangle;    // 0 = 近軸, 1 = Pade(1,1)
 	int    pol;          // 0 = スカラー, 1 = x 偏波 (半ベクトル), 2 = y 偏波
+	// 対称境界 : インデックス 0 の手前 (半セル外) に鏡像面を置く
+	//   0 = なし (Dirichlet), 1 = 対称 (E[-1] = E[0]), 2 = 反対称 (E[-1] = -E[0])
+	int    symx;         // x 方向 (ix = 0 側)
+	int    symy;         // y 方向 (iy = 0 側)
 };
 
 // 1 ステップ伝搬 (E, n2 は Nx*Ny, 行優先 [iy*Nx+ix])

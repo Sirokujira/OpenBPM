@@ -112,6 +112,7 @@ static wabpm_params mode_params(int Nx, int Ny, double dx, double dy,
     W.k0 = 2.0 * M_PI / lambda;
     W.n0 = n0;
     W.wideangle = 0; W.pol = 0;
+    W.symx = 0; W.symy = 0;
     // a*mu_max ~ 0.5 となる虚軸ステップ幅
     const double mu_max = W.k0 * W.k0 * (nmax * nmax - n0 * n0);
     W.dz = 2.0 * W.k0 * W.n0 / mu_max;

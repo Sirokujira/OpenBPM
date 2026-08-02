@@ -242,6 +242,8 @@ EXTERN struct {
 	int    modeExcite;        // 1 = excite with fundamental mode (mode-matched)
 	double taper;             // transverse scale ratio at output (1 = no taper)
 	double twist;             // twist rate [deg/m] (0 = no twist)
+	int    symx;              // mirror at x = xmin : 0 = none, 1 = symmetric, 2 = anti
+	int    symy;              // mirror at y = ymin : 0 = none, 1 = symmetric, 2 = anti
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {

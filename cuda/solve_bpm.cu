@@ -125,8 +125,11 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	P->dz = (float)Dz;
 	P->iz_start = 0;
 	P->iz_end = Nz;
-	P->xSymmetry = 0;
-	P->ySymmetry = 0;
+	// 対称境界 (symmetry = <x|y|xy> [sym|anti]) :
+	// 鏡像面は指定軸のメッシュ始端。カーネルの命名は「対称面の軸」基準のため、
+	// x 方向の鏡像 (x = xmin) は ySymmetry、y 方向の鏡像 (y = ymin) は xSymmetry。
+	P->ySymmetry = (unsigned char)BPM.symx;   // x = xmin の鏡像面
+	P->xSymmetry = (unsigned char)BPM.symy;   // y = ymin の鏡像面
 
 	// 参照屈折率 : 入力 (refindex =) を優先し、
 	// 未指定なら計算領域中心 (z=先頭スライス) の材料から取得する
@@ -222,14 +225,15 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			yc0 = Yn[Feed[0].j];
 		}
 		else {
-			xc0 = 0.5 * (Xn[0] + Xn[Nx]);
-			yc0 = 0.5 * (Yn[0] + Yn[Ny]);
+			// 対称境界がある軸は鏡像面 (メッシュ始端) を既定の中心にする
+			xc0 = BPM.symx ? Xn[0] : 0.5 * (Xn[0] + Xn[Nx]);
+			yc0 = BPM.symy ? Yn[0] : 0.5 * (Yn[0] + Yn[Ny]);
 		}
 		const double volt = (NFeed > 0) ? Feed[0].volt : 1;
-		const double xEdge = 0.45 * Lx;           // 吸収体開始位置 (領域中心からの距離)
-		const double yEdge = 0.45 * Ly;
-		const double xmid = 0.5 * (Xn[0] + Xn[Nx]);
-		const double ymid = 0.5 * (Yn[0] + Yn[Ny]);
+		const double xEdge = BPM.symx ? (0.90 * Lx) : (0.45 * Lx);           // 吸収体開始位置 (領域中心からの距離)
+		const double yEdge = BPM.symy ? (0.90 * Ly) : (0.45 * Ly);
+		const double xmid = BPM.symx ? Xn[0] : 0.5 * (Xn[0] + Xn[Nx]);
+		const double ymid = BPM.symy ? Yn[0] : 0.5 * (Yn[0] + Yn[Ny]);
 		const double alpha = 3.0e14;              // 吸収係数 [1/m^3] (BPM-MATLAB 既定値)
 		// 入射ビームの傾き (beamtilt =) : 横方向波数の位相ランプ
 		const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
@@ -270,6 +274,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		Wm.n0 = P->n_0;
 		Wm.wideangle = 0;
 		Wm.pol = 0;
+		Wm.symx = BPM.symx;
+		Wm.symy = BPM.symy;
 
 		// 入力断面の比誘電率 (実部のみ : モードは無損失断面で定義する)
 		std::complex<double> *n2m = new std::complex<double>[NN2];
@@ -503,6 +509,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		W.n0 = P->n_0;
 		W.wideangle = BPM.wideangle;
 		W.pol = BPM.pol;
+		W.symx = BPM.symx;
+		W.symy = BPM.symy;
 
 		wabpm_cplx *Ed = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
 		wabpm_cplx *n2 = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));

@@ -80,6 +80,8 @@ int input_data(FILE *fp)
 	BPM.modeExcite = 0;
 	BPM.taper = 1;    // 1 = テーパなし (出口/入口の横方向スケール比)
 	BPM.twist = 0;    // 0 = ツイストなし [deg/m]
+	BPM.symx = 0;     // 0 = 対称境界なし
+	BPM.symy = 0;
 
 	// 非線形吸収 (TPA) と入力パワー掃引 (省略時は従来動作 = 線形単発)
 	NTpaB = 0;
@@ -532,6 +534,18 @@ int input_data(FILE *fp)
 		else if (!strcmp(strkey, "twist")) {
 			// twist = <rate[deg/m]> : 導波路のツイスト率 (座標系を z に沿って回転)
 			BPM.twist = atof(token[2]);
+		}
+		else if (!strcmp(strkey, "symmetry")) {
+			// symmetry = <x|y|xy> [sym|anti] : 対称境界 (計算領域を 1/2〜1/4 に削減)
+			// 鏡像面は指定軸のメッシュ始端 (x = xmesh の始点 / y = ymesh の始点)。
+			// メッシュには半領域のみを与えること (出力も半領域になる)
+			const int t = ((ntoken > 3) && !strcmp(token[3], "anti")) ? 2 : 1;
+			if (strchr(token[2], 'x') != NULL) BPM.symx = t;
+			if (strchr(token[2], 'y') != NULL) BPM.symy = t;
+			if ((BPM.symx == 0) && (BPM.symy == 0)) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
 		}
 		else if (!strcmp(strkey, "modes")) {
 			// modes = <nModes> [excite] : 入力断面のモード解析 (虚軸伝搬法)。

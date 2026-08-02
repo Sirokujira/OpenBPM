@@ -186,6 +186,8 @@ P_Struct findModes(P_Struct P, int nModes, bool singleCoreModes = false, bool so
     W.n0 = P.n_0;
     W.wideangle = 0;
     W.pol = 0;
+    W.symx = 0;
+    W.symy = 0;
 
     // 屈折率分布 (実数) -> 複素比誘電率
     vector<complex<double>> n2((size_t)N);

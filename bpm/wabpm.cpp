@@ -70,6 +70,10 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 	const double n02 = W->n0 * W->n0;
 	const int polx = (W->pol == 1);
 	const int poly = (W->pol == 2);
+	// 対称境界 : ix=0 / iy=0 の手前 (半セル外) に鏡像面。E[-1] = sgn*E[0]
+	const int    hasSx = (W->symx != 0), hasSy = (W->symy != 0);
+	const double sgnx = (W->symx == 2) ? -1.0 : 1.0;
+	const double sgny = (W->symy == 2) ? -1.0 : 1.0;
 
 	cplx *T = new cplx[N];
 
@@ -84,6 +88,7 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 			stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
 			cplx lap = b * E[i];
 			if (iy > 0)      lap += a * E[i - Nx];
+			else if (hasSy)  lap += (a * sgny) * E[i];   // 鏡像セル
 			if (iy < Ny - 1) lap += c * E[i + Nx];
 			const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
 			T[i] = E[i] + dm * (lap * idy2 + V2 * E[i]);
@@ -101,6 +106,7 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 			stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
 			cplx lap = b * T[i];
 			if (ix > 0)      lap += a * T[i - 1];
+			else if (hasSx)  lap += (a * sgnx) * T[i];   // 鏡像セル
 			if (ix < Nx - 1) lap += c * T[i + 1];
 			const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
 			E[i] = T[i] + dm * (lap * idx2 + V2 * T[i]);
@@ -131,6 +137,9 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 					diag  -= sub * cw[ix - 1];
 					e[ix] -= sub * e[ix - 1];
 				}
+				else if (hasSx) {
+					diag += sub * sgnx;   // E[-1] = sgn*E[0] を対角へ畳み込む
+				}
 				cw[ix] = sup / diag;
 				e[ix] /= diag;
 			}
@@ -156,6 +165,9 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 					// cw / E の前要素は対角で正規化済み (c', r')
 					diag -= sub * cw[iy - 1];
 					E[i] -= sub * E[i - Nx];
+				}
+				else if (hasSy) {
+					diag += sub * sgny;   // E[-1] = sgn*E[0] を対角へ畳み込む
 				}
 				cw[iy] = sup / diag;
 				E[i] /= diag;
@@ -208,6 +220,9 @@ void wabpm_apply_P(const wabpm_params *W, const cplx *E, const cplx *n2, cplx *o
 	const double n02 = W->n0 * W->n0;
 	const int polx = (W->pol == 1);
 	const int poly = (W->pol == 2);
+	const int    hasSx = (W->symx != 0), hasSy = (W->symy != 0);
+	const double sgnx = (W->symx == 2) ? -1.0 : 1.0;
+	const double sgny = (W->symy == 2) ? -1.0 : 1.0;
 
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -219,10 +234,12 @@ void wabpm_apply_P(const wabpm_params *W, const cplx *E, const cplx *n2, cplx *o
 			stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
 			cplx lapx = b * E[i];
 			if (ix > 0)      lapx += a * E[i - 1];
+			else if (hasSx)  lapx += (a * sgnx) * E[i];
 			if (ix < Nx - 1) lapx += c * E[i + 1];
 			stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
 			cplx lapy = b * E[i];
 			if (iy > 0)      lapy += a * E[i - Nx];
+			else if (hasSy)  lapy += (a * sgny) * E[i];
 			if (iy < Ny - 1) lapy += c * E[i + Nx];
 			out[i] = lapx * idx2 + lapy * idy2 + k0 * k0 * (n2[i] - n02) * E[i];
 		}

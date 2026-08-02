@@ -39,6 +39,9 @@ struct wabpm_dev {
 	double k0, n02;
 	cplxd dp, dm;
 	int   polx, poly;
+	// 対称境界 : ix=0 / iy=0 の手前 (半セル外) に鏡像面。E[-1] = sgn*E[0]
+	int    hasSx, hasSy;
+	double sgnx, sgny;
 };
 
 struct wabpm_gpu {
@@ -82,8 +85,9 @@ static void k_explicit_y(struct wabpm_dev D, const cplxd *E, cplxd *T, const cpl
 		double a, b, c;
 		dstencil(D.poly, n2, i, D.Nx, iy, D.Ny, &a, &b, &c);
 		cplxd lap = b * E[i];
-		if (iy > 0)        lap += a * E[i - D.Nx];
-		if (iy < D.Ny - 1) lap += c * E[i + D.Nx];
+		if (iy > 0)          lap += a * E[i - D.Nx];
+		else if (D.hasSy)    lap += (a * D.sgny) * E[i];   // 鏡像セル
+		if (iy < D.Ny - 1)   lap += c * E[i + D.Nx];
 		const cplxd V2 = 0.5 * D.k0 * D.k0 * (n2[i] - D.n02);
 		T[i] = E[i] + D.dm * (lap * D.idy2 + V2 * E[i]);
 	}
@@ -99,8 +103,9 @@ static void k_explicit_x(struct wabpm_dev D, cplxd *E, const cplxd *T, const cpl
 		double a, b, c;
 		dstencil(D.polx, n2, i, 1, ix, D.Nx, &a, &b, &c);
 		cplxd lap = b * T[i];
-		if (ix > 0)        lap += a * T[i - 1];
-		if (ix < D.Nx - 1) lap += c * T[i + 1];
+		if (ix > 0)          lap += a * T[i - 1];
+		else if (D.hasSx)    lap += (a * D.sgnx) * T[i];   // 鏡像セル
+		if (ix < D.Nx - 1)   lap += c * T[i + 1];
 		const cplxd V2 = 0.5 * D.k0 * D.k0 * (n2[i] - D.n02);
 		E[i] = T[i] + D.dm * (lap * D.idx2 + V2 * T[i]);
 	}
@@ -125,6 +130,9 @@ static void k_implicit_x(struct wabpm_dev D, cplxd *E, const cplxd *n2, cplxd *c
 				// w / e の前要素は対角で正規化済み (c', r')
 				diag  -= sub * w[ix - 1];
 				e[ix] -= sub * e[ix - 1];
+			}
+			else if (D.hasSx) {
+				diag += sub * D.sgnx;   // E[-1] = sgn*E[0] を対角へ畳み込む
 			}
 			w[ix] = sup / diag;
 			e[ix] /= diag;
@@ -152,6 +160,9 @@ static void k_implicit_y(struct wabpm_dev D, cplxd *E, const cplxd *n2, cplxd *c
 			if (iy > 0) {
 				diag -= sub * w[iy - 1];
 				E[i] -= sub * E[i - D.Nx];
+			}
+			else if (D.hasSy) {
+				diag += sub * D.sgny;   // E[-1] = sgn*E[0] を対角へ畳み込む
 			}
 			w[iy] = sup / diag;
 			E[i] /= diag;
@@ -199,6 +210,10 @@ struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
 	G->D.n02 = W->n0 * W->n0;
 	G->D.polx = (W->pol == 1);
 	G->D.poly = (W->pol == 2);
+	G->D.hasSx = (W->symx != 0);
+	G->D.hasSy = (W->symy != 0);
+	G->D.sgnx = (W->symx == 2) ? -1.0 : 1.0;
+	G->D.sgny = (W->symy == 2) ? -1.0 : 1.0;
 	if (W->wideangle) {
 		G->D.dp = cplxd(1.0,  W->k0 * W->n0 * W->dz) / (4 * W->k0 * W->k0 * W->n0 * W->n0);
 		G->D.dm = cplxd(1.0, -W->k0 * W->n0 * W->dz) / (4 * W->k0 * W->k0 * W->n0 * W->n0);
