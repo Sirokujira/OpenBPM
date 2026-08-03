@@ -51,6 +51,28 @@ static void traceFromAcc(const double *acc, double dA,
 	}
 }
 
+// 各モードへのパワー占有率 eta_m = |<phi_m, E>|^2 / (||phi_m||^2 * ||E||^2)。
+// CPU 版 sol/solve_bpm.cpp の computeOverlap と同一の式 (ホスト側で計算する:
+// モード形状はホストにしかなく、1 ステップあたり nModes*N の演算で済むため)。
+// getE(i) は格子点 i の複素電界を返す。結果は out[m*stride] へ格納する。
+template <typename F>
+static void computeOverlap(int nModes, long N, const std::complex<double> *modes,
+                           F getE, double *out, long stride)
+{
+	double pe = 0;
+	for (long i = 0; i < N; i++) pe += std::norm(getE(i));
+	for (int m = 0; m < nModes; m++) {
+		const std::complex<double> *phi = &modes[(size_t)m * N];
+		std::complex<double> ip = 0;
+		double pm = 0;
+		for (long i = 0; i < N; i++) {
+			ip += std::conj(phi[i]) * getE(i);
+			pm += std::norm(phi[i]);
+		}
+		out[(size_t)m * stride] = ((pe > 0) && (pm > 0)) ? (std::norm(ip) / (pm * pe)) : 0.0;
+	}
+}
+
 void solve_bpm(int io, double *tdft, FILE *fp)
 {
 	// HDF5ファイルの作成
@@ -486,7 +508,14 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	double *trCy    = (double *)malloc((size_t)ntr * sizeof(double));
 	double *trWx    = (double *)malloc((size_t)ntr * sizeof(double));
 	double *trWy    = (double *)malloc((size_t)ntr * sizeof(double));
+	// モード結合率 (modes 指定時のみ) : eta_m(z) = |<phi_m, E>|^2 / (||phi_m||^2 ||E||^2)
+	// 格納は行優先 [m*ntr + t] (HDF5 では nModesFound x ntr の 2 次元配列)
+	double *trOverlap = (nModesFound > 0)
+		? (double *)malloc((size_t)nModesFound * ntr * sizeof(double)) : NULL;
 	floatcomplex *Ecol = (floatcomplex *)malloc(P->Ny * sizeof(floatcomplex));
+	// 近軸パスのモード結合率用 : 全電界のホスト受け皿 (modes 指定時のみ確保)
+	floatcomplex *Eovl = (trOverlap != NULL)
+		? (floatcomplex *)malloc((size_t)P->Nx * P->Ny * sizeof(floatcomplex)) : NULL;
 	// 統計量カーネル用 : セル中心座標と集計バッファをデバイスへ
 	double *d_xc = NULL, *d_yc = NULL, *d_acc = NULL;
 	double accHost[6];
@@ -663,6 +692,14 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				wabpm_gpu_trace(G, d_xc, d_yc, d_acc, accHost);
 				traceFromAcc(accHost, Dx * Dy,
 				             &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
+				// モード結合率 (全電界は Iyz 用に取得済みの Ed を再利用)
+				if (trOverlap) {
+					computeOverlap(nModesFound, (long)Nx * Ny, modeFields,
+					               [&](long i) {
+					                   return std::complex<double>(Ed[i].real(), Ed[i].imag());
+					               },
+					               &trOverlap[t], ntr);
+				}
 			}
 
 			// スナップショットを記録 (全電界をホストへ取得)
@@ -786,6 +823,18 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			CUDA_CHECK(cudaMemcpy(accHost, d_acc, 6 * sizeof(double), cudaMemcpyDeviceToHost));
 			traceFromAcc(accHost, Dx * Dy,
 			             &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
+			// モード結合率 : モード形状はホストにしかないため全電界を転送する。
+			// modes 指定時のみのコストで、未指定時は従来通り行/列だけの転送。
+			if (trOverlap) {
+				CUDA_CHECK(cudaMemcpy(Eovl, P_now.E2,
+				                      (size_t)P->Nx * P->Ny * sizeof(floatcomplex),
+				                      cudaMemcpyDeviceToHost));
+				computeOverlap(nModesFound, (long)P->Nx * P->Ny, modeFields,
+				               [&](long i) {
+				                   return std::complex<double>(CREALF(Eovl[i]), CIMAGF(Eovl[i]));
+				               },
+				               &trOverlap[t], ntr);
+			}
 
 			// スナップショットを記録 (デバイス側 E2 の全体をコピー)
 			if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
@@ -846,6 +895,18 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			}
 			fclose(fcsv);
 			sprintf(str, "ONN: activation curve -> %s (%d points)", FN_activation, nsweep);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
+	}
+
+
+	// モード結合率の要約 : 出口断面 (z = z_end) での各モードのパワー占有率をログへ
+	// (CPU 版 sol/solve_bpm.cpp と同一の出力)
+	if (trOverlap && (ntr > 0)) {
+		for (int m = 0; m < nModesFound; m++) {
+			sprintf(str, "modes : overlap eta_%d = %.6f (z = z_end)",
+			        m + 1, trOverlap[((size_t)m * ntr) + (ntr - 1)]);
 			if (io) fprintf(fp, "%s\n", str);
 			fprintf(stdout, "%s\n", str);
 		}
@@ -957,6 +1018,16 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			dataspace_id = H5Screate_simple(1, tr_dims, NULL);
 			dataset_id = H5Dcreate(trace_group_id, trace_data[n].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trace_data[n].data);
+			H5Dclose(dataset_id);
+			H5Sclose(dataspace_id);
+		}
+		// モード結合率 (nModesFound x ntr) : overlap[m][t] は z = z[t] における
+		// モード m+1 のパワー占有率。/modes/neff と同じモード順序。
+		if (trOverlap) {
+			hsize_t ov_dims[2] = {(hsize_t)nModesFound, (hsize_t)ntr};
+			dataspace_id = H5Screate_simple(2, ov_dims, NULL);
+			dataset_id = H5Dcreate(trace_group_id, "overlap", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+			status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trOverlap);
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
 		}
@@ -1170,6 +1241,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	free(Ecol);
 	free(trZ); free(trPower); free(trPeak);
 	free(trCx); free(trCy); free(trWx); free(trWy);
+	if (trOverlap) free(trOverlap);
+	if (Eovl) free(Eovl);
 	CUDA_CHECK(cudaFree(d_xc));
 	CUDA_CHECK(cudaFree(d_yc));
 	CUDA_CHECK(cudaFree(d_acc));

@@ -70,6 +70,11 @@ jobs:
                if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
                print "mode analysis OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+          # モード結合率 (/trace/overlap) : モード整合励振なので出口でも eta_1 > 0.99
+          awk '/overlap eta_1/ { e = $(NF-3) + 0
+               if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
+               print "mode overlap OK: eta_1 = " e; ok = 1 }
+               END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
 
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
@@ -194,6 +199,11 @@ jobs:
                if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
                print "mode analysis OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+          # モード結合率 (/trace/overlap) : モード整合励振なので出口でも eta_1 > 0.99
+          awk '/overlap eta_1/ { e = $(NF-3) + 0
+               if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
+               print "mode overlap OK: eta_1 = " e; ok = 1 }
+               END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
 
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
@@ -334,6 +344,11 @@ jobs:
                if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
                print "mode analysis OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+          # モード結合率 (/trace/overlap) : モード整合励振なので出口でも eta_1 > 0.99
+          awk '/overlap eta_1/ { e = $(NF-3) + 0
+               if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
+               print "mode overlap OK: eta_1 = " e; ok = 1 }
+               END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
           # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
           mkdir -p ../smoke-tt && cd ../smoke-tt
           cp ../data/sample/taper_twist.ofd .

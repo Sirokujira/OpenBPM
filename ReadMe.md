@@ -16,12 +16,12 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 | `post/` | ポストプロセッサ `obpm_post` (ev2/ev3、収束・波形プロット)。※下記の既知事項参照 |
 | `include/bpm/` | BPM 共有ヘッダ (`bpm_prototype.h` のプラットフォーム別 complex マクロ等) |
 
-> ⚠ **既知事項**: `obpm_post` は OpenFDTD 由来のポスト処理
-> (obpm.out ベースの FDTD 量の描画) のままで、BPM が
-> `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`) や
-> 最終電界 (`Efinal_*`) の可視化には未対応です。当面は HDF5 を
-> Python (h5py) などで直接読んでください。GUI (OpenFDTD-X) の
-> H5 ビューアからも参照できます。
+> `obpm_post` は OpenFDTD 由来のポスト処理に加え、BPM が
+> `time_series_data.h5` に書く伝搬マップ (`/field/Ixz`)・最終電界 (`Efinal_*`)・
+> スナップショット (`/field/frames`) の等高線ページを出力します
+> (`post/postbpm.c`)。`/trace` や `/modes` などのグラフ表示は
+> `tools/plot_ixz.py` (PNG/GIF) を使うか、HDF5 を Python (h5py) で直接
+> 読んでください。GUI (OpenFDTD-X) の H5 ビューアからも参照できます。
 
 ## ビルド
 
@@ -56,6 +56,8 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
 - `*_ixz.png` : 伝搬マップ `/field/Ixz` のヒートマップ
 - `*_final.png` : 最終電界 `|E(x,y)|^2` と屈折率分布
 - `*_trace.png` : z ごとのスカラー推移 (`/trace` : 断面パワー・ピーク強度・重心・ビーム幅)
+- `*_overlap.png` : 各導波モードへのパワー占有率の z 推移 (`/trace/overlap`。
+  入力に `modes = <nModes>` を指定した場合のみ)
 - `*_modes.png` : 導波モード形状と neff (入力に `modes = <nModes>` を指定して
   `/modes` を出力した場合のみ)
 - `*_prop.gif` : `|E(x,y)|^2` の伝搬アニメーション (入力に `frames = <interval>` を
@@ -78,6 +80,10 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
   置き換わります (モード整合励振)。サンプル `data/sample/fiber_modes.ofd` では
   LP01 の neff = 1.447167 が分散方程式の厳密解と一致し、電力保存が
   T = 0.99999 (ガウシアン励振では 0.99988) に向上します。
+- `modes` 指定時は伝搬中の**モード結合率** η_m(z) も `/trace/overlap` に記録されます。
+  「基本モードにどれだけパワーが残っているか」を z の関数として GUI 表示できます
+  (`tools/plot_ixz.py` の `*_overlap.png`)。`fiber_modes.ofd` では
+  `excite` 指定時 η_1 ≈ 0.9999、ガウシアン励振では η_1 ≈ 0.9938 となります。
 - `include/bpm/allset.hpp` の `findModes()` (BPM-MATLAB 互換 API) も同じソルバを
   使用します。
 
@@ -144,6 +150,12 @@ z ステップごとの断面統計量を 1 次元配列 (長さ = 伝搬ステ�
 | `/trace/peak` | \|E\|^2 の最大値 |
 | `/trace/centroid_x`, `/trace/centroid_y` | 強度重心 [m] |
 | `/trace/width_x`, `/trace/width_y` | 強度の 2 次モーメント幅 2σ [m] |
+| `/trace/overlap` | 各導波モードへのパワー占有率 η_m(z) (nModes x Nz)。`modes = <n>` 指定時のみ |
+
+`/trace/overlap` は η_m = \|<φ_m, E>\|^2 / (\|\|φ_m\|\|^2 \|\|E\|\|^2) で、
+モード順序は `/modes/neff` と同じ (実効屈折率の降順)。直線導波路では各 η_m は
+z によらずほぼ一定になり、テーパ/ツイスト/曲げではモード間の変換が推移として現れます。
+Σ_m η_m < 1 のぶんが放射モード (非導波成分) です。
 
 座標軸は `/metadata/Xc`, `Yc`, `Zc` (セル中心) と `Xn`, `Yn`, `Zn` (節点) を使用できます。
 `/trace` と `/field/Iyz` は常に出力され、CPU 版・CUDA 版で同一内容です

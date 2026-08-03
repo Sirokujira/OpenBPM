@@ -24,6 +24,27 @@
 //   peak   : |E|^2 の最大値
 //   cx, cy : 強度重心 [m]
 //   wx, wy : 強度の 2 次モーメント幅 2*sigma [m]
+// 各モードへのパワー占有率 eta_m = |<phi_m, E>|^2 / (||phi_m||^2 * ||E||^2) を求める。
+// getE(i) は格子点 i の複素電界を返す呼び出し可能オブジェクト。
+// 結果は out[m*stride] に格納する (m = モード番号)。
+template <typename F>
+static void computeOverlap(int nModes, long N, const std::complex<double> *modes,
+                           F getE, double *out, long stride)
+{
+    double pe = 0;
+    for (long i = 0; i < N; i++) pe += std::norm(getE(i));
+    for (int m = 0; m < nModes; m++) {
+        const std::complex<double> *phi = &modes[(size_t)m * N];
+        std::complex<double> ip = 0;
+        double pm = 0;
+        for (long i = 0; i < N; i++) {
+            ip += std::conj(phi[i]) * getE(i);
+            pm += std::norm(phi[i]);
+        }
+        out[(size_t)m * stride] = ((pe > 0) && (pm > 0)) ? (std::norm(ip) / (pm * pe)) : 0.0;
+    }
+}
+
 template <typename F>
 static void computeTrace(int Nx, int Ny, const double *xc, const double *yc,
                          double dA, F getI,
@@ -478,6 +499,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     double *trCy     = (double *)malloc((size_t)ntr * sizeof(double));
     double *trWx     = (double *)malloc((size_t)ntr * sizeof(double));
     double *trWy     = (double *)malloc((size_t)ntr * sizeof(double));
+    // モード結合率 (modes 指定時のみ) : eta_m(z) = |<phi_m, E>|^2 / (||phi_m||^2 ||E||^2)
+    // 直交規格化済みモードに対する各モードのパワー占有率 (Σ_m eta_m <= 1)
+    // 格納は行優先 [m*ntr + t] (HDF5 では nModesFound x ntr の 2 次元配列)
+    double *trOverlap = (nModesFound > 0)
+        ? (double *)malloc((size_t)nModesFound * ntr * sizeof(double)) : NULL;
 
     // |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
     const int  frameInterval = BPM.frames;
@@ -657,6 +683,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 computeTrace(P->Nx, P->Ny, Xc, Yc, Dx * Dy,
                              [&](int ix, int iy) { return std::norm(Ed[ix + (long)iy * P->Nx]); },
                              &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
+                if (trOverlap) {
+                    computeOverlap(nModesFound, (long)P->Nx * P->Ny, modeFields,
+                                   [&](long i) { return Ed[i]; }, &trOverlap[t], ntr);
+                }
             }
 
             // スナップショットを記録
@@ -775,6 +805,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                              return ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
                          },
                          &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
+            if (trOverlap) {
+                computeOverlap(nModesFound, (long)P->Nx * P->Ny, modeFields,
+                               [&](long i) {
+                                   const floatcomplex e = P->E2[i];
+                                   return std::complex<double>(CREALF(e), CIMAGF(e));
+                               },
+                               &trOverlap[t], ntr);
+            }
         }
 
         // スナップショットを記録
@@ -849,6 +887,17 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         }
     }
 
+
+    // モード結合率の要約 : 出口断面 (z = z_end) での各モードのパワー占有率をログへ。
+    // GUI/CI から「基本モードにどれだけ残ったか」を HDF5 を開かずに確認できる。
+    if (trOverlap && (ntr > 0)) {
+        for (int m = 0; m < nModesFound; m++) {
+            sprintf(str, "modes : overlap eta_%d = %.6f (z = z_end)",
+                    m + 1, trOverlap[((size_t)m * ntr) + (ntr - 1)]);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+    }
     // result
     if (io) {
         sprintf(str, "    --- propagated %ld steps, output power = %.6e ---",
@@ -956,6 +1005,16 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             dataspace_id = H5Screate_simple(1, tr_dims, NULL);
             dataset_id = H5Dcreate(trace_group_id, trace_data[n].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
             status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trace_data[n].data);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        // モード結合率 (nModesFound x ntr) : overlap[m][t] は z = z[t] における
+        // モード m+1 のパワー占有率。/modes/neff と同じモード順序。
+        if (trOverlap) {
+            hsize_t ov_dims[2] = {(hsize_t)nModesFound, (hsize_t)ntr};
+            dataspace_id = H5Screate_simple(2, ov_dims, NULL);
+            dataset_id = H5Dcreate(trace_group_id, "overlap", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trOverlap);
             H5Dclose(dataset_id);
             H5Sclose(dataspace_id);
         }
@@ -1233,6 +1292,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     free(Iyz);
     free(trZ); free(trPower); free(trPeak);
     free(trCx); free(trCy); free(trWx); free(trWy);
+    if (trOverlap) free(trOverlap);
     if (Frames) free(Frames);
     if (FramesR) free(FramesR);
     if (FramesI) free(FramesI);

@@ -5,6 +5,8 @@
   - <prefix>_ixz.png    : 伝搬マップ |E(x, y=Ny/2, z)|^2 (/field/Ixz)
   - <prefix>_final.png  : 最終電界 |E(x,y)|^2 と屈折率分布 (/field/Efinal_*, n_out_r)
   - <prefix>_trace.png  : z ごとのスカラー推移 (/trace : パワー・ピーク強度・重心・幅)
+  - <prefix>_overlap.png: 各導波モードへのパワー占有率の z 推移 (/trace/overlap。
+                          `modes = <nModes>` 指定時のみ)
   - <prefix>_modes.png  : 導波モード形状と neff (/modes がある場合のみ。
                           ソルバ入力で `modes = <nModes>` を指定して解析する)
   - <prefix>_prop.gif   : |E(x,y)|^2 の伝搬アニメーション (/field/frames がある場合のみ。
@@ -68,6 +70,8 @@ def main():
             for k in ("z", "power", "peak", "centroid_x", "centroid_y", "width_x", "width_y"):
                 if f"/trace/{k}" in f:
                     trace[k] = f[f"/trace/{k}"][:]
+        # モード結合率 (nModes x ntr)。`modes = <n>` 指定時のみ存在する
+        overlap = f["/trace/overlap"][:] if "/trace/overlap" in f else None
         mode_fields = []
         mode_neff = []
         if "/modes" in f:
@@ -155,6 +159,26 @@ def main():
         fig.savefig(f"{prefix}_trace.png", dpi=150)
         plt.close(fig)
         print(f"wrote {prefix}_trace.png")
+
+    # --- モード結合率の z 推移 (/trace/overlap) ---
+    if overlap is not None and trace.get("z") is not None and overlap.shape[1] > 1:
+        zum = trace["z"] * 1e6
+        fig, ax = plt.subplots(figsize=(8, 4))
+        for m in range(overlap.shape[0]):
+            ne = f"  (neff = {mode_neff[m]:.6f})" if m < len(mode_neff) else ""
+            ax.plot(zum, overlap[m], label=f"mode {m + 1}{ne}")
+        if overlap.shape[0] > 1:
+            ax.plot(zum, overlap.sum(axis=0), "k--", lw=1, label="sum")
+        ax.set_xlabel("z [um]")
+        ax.set_ylabel("power fraction")
+        ax.set_title("Mode coupling ratio (/trace/overlap)")
+        ax.set_ylim(0, 1.05)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(f"{prefix}_overlap.png", dpi=150)
+        plt.close(fig)
+        print(f"wrote {prefix}_overlap.png ({overlap.shape[0]} modes)")
 
     # --- 導波モード形状 (/modes) ---
     if mode_fields:
