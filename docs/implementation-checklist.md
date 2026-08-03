@@ -373,3 +373,19 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
     データセットが出力されることを確認。既存回帰はすべて不変
     (fiber 3.122518e+02、ctest 3 スイート、ONN、symmetry、taper/twist)。
     CUDA 12.0 コンパイル検証済み (実機実行は GPU 待ち)。
+
+- [x] **位相表示用の複素電界スナップショットが無い** ✅ 対応済み (第 7 回の続き)
+  - 場所: `include/obpm.h` / `sol/input_data.c` / `sol/solve_bpm.cpp` /
+    `cuda/solve_bpm.cu` / `tools/plot_ixz.py`
+  - 現状 (対応前): `/field/frames` は強度のみで、GUI で位相分布を表示できなかった
+    (複素電界は最終断面 `Efinal_r/i` のみ)。
+  - 対応内容: `frames = <interval> [complex]` の `complex` オプションを追加し、
+    複素電界を `/field/frames_r`, `/field/frames_i` (nframes x Ny x Nx) に出力する。
+    既定 (complex なし) は従来どおり強度のみで、容量も変わらない。
+    `tools/plot_ixz.py` に位相アニメーション `*_phase.gif` を追加
+    (振幅で不透明度を落とし、強度の低い領域の無意味な位相を目立たせない)。
+  - 検証: `beamtilt = 3.0` の傾斜ビームで、第 0 フレームの x 方向位相勾配が
+    解析値 `k0*n0*sin(3deg)` と相対誤差 0.1% で一致。
+    `/field/frames` と `|frames_r + i*frames_i|^2` の整合性 1.8e-7。
+    `complex` 無指定時は `frames_r` が出力されないこと (後方互換) を確認。
+    既存回帰はすべて不変。CUDA 12.0 コンパイル検証済み。

@@ -60,6 +60,8 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
   `/modes` を出力した場合のみ)
 - `*_prop.gif` : `|E(x,y)|^2` の伝搬アニメーション (入力に `frames = <interval>` を
   指定して `/field/frames` を記録した場合のみ)
+- `*_phase.gif` : 位相 `arg(E)` の伝搬アニメーション (`frames = <interval> complex` で
+  `/field/frames_r`, `/field/frames_i` を記録した場合のみ)
 
 ## モード解析
 
@@ -157,7 +159,7 @@ z ステップごとの断面統計量を 1 次元配列 (長さ = 伝搬ステ�
 | `polarization` | `polarization = <scalar\|x\|y>` | 半ベクトル BPM の偏波方向。x/y 指定時は偏波方向の界面で D 法線成分連続 (Stern 差分) を反映。省略時はスカラー |
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
 | `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
-| `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
+| `frames` | `frames = <interval> [complex]` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。`complex` 指定時は複素電界も `/field/frames_r`, `/field/frames_i` へ出力 (位相表示用、容量 3 倍)。省略時 (0) は記録なし |
 | `taper` | `taper = <ratio>` | 出口での横方向スケール比 (入口 = 1)。屈折率分布を z に沿って相似縮小/拡大する (座標変換)。省略時 1 |
 | `twist` | `twist = <rate[deg/m]>` | 導波路のツイスト率。屈折率分布を z に沿って回転させる。省略時 0 |
 | `symmetry` | `symmetry = <x\|y\|xy> [sym\|anti]` | 対称境界。指定軸のメッシュ始端を鏡像面とし計算領域を 1/2〜1/4 に削減 (既定 sym)。**メッシュ・出力とも半領域**になる。省略時は対称境界なし |

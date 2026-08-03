@@ -502,8 +502,13 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	    ? ((P->iz_end - P->iz_start - 1) / frameInterval + 1) : 0;
 	float *Frames = (nframes > 0)
 	    ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
+	// 複素電界のスナップショット (frames = <interval> complex 指定時のみ。位相表示用)
+	const int framesCplx = (nframes > 0) && BPM.framesComplex;
+	float *FramesR = framesCplx ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
+	float *FramesI = framesCplx ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
 	if (nframes > 0) {
-		sprintf(str, "frames : interval = %d steps, count = %ld", frameInterval, nframes);
+		sprintf(str, "frames : interval = %d steps, count = %ld%s", frameInterval, nframes,
+		        BPM.framesComplex ? " (complex field also recorded)" : "");
 		if (io) fprintf(fp, "%s\n", str);
 		fprintf(stdout, "%s\n", str);
 	}
@@ -663,9 +668,14 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			// スナップショットを記録 (全電界をホストへ取得)
 			if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
 				wabpm_gpu_get_field(G, Ed);
-				float *f = &Frames[(size_t)((iz - P->iz_start) / frameInterval) * Nx * Ny];
+				const size_t off = (size_t)((iz - P->iz_start) / frameInterval) * Nx * Ny;
+				float *f = &Frames[off];
 				for (long i = 0; i < (long)Nx * Ny; i++) {
 					f[i] = (float)thrust::norm(Ed[i]);
+					if (framesCplx) {
+						FramesR[off + i] = (float)Ed[i].real();
+						FramesI[off + i] = (float)Ed[i].imag();
+					}
 				}
 			}
 
@@ -910,6 +920,18 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Frames);
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
+			// 複素電界 (位相表示用)
+			if (framesCplx) {
+				const char *cn[2] = {"frames_r", "frames_i"};
+				float *cd[2] = {FramesR, FramesI};
+				for (int c = 0; c < 2; c++) {
+					dataspace_id = H5Screate_simple(3, fr_dims, NULL);
+					dataset_id = H5Dcreate(field_group_id, cn[c], H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+					status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, cd[c]);
+					H5Dclose(dataset_id);
+					H5Sclose(dataspace_id);
+				}
+			}
 		}
 		H5Gclose(field_group_id);
 	}
@@ -1152,6 +1174,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	CUDA_CHECK(cudaFree(d_yc));
 	CUDA_CHECK(cudaFree(d_acc));
 	if (Frames) free(Frames);
+	if (FramesR) free(FramesR);
+	if (FramesI) free(FramesI);
 	free(tpa_mat);
 	if (betaSlice != NULL) free(betaSlice);
 	if (E0 != NULL) free(E0);

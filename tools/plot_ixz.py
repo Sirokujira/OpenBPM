@@ -9,6 +9,8 @@
                           ソルバ入力で `modes = <nModes>` を指定して解析する)
   - <prefix>_prop.gif   : |E(x,y)|^2 の伝搬アニメーション (/field/frames がある場合のみ。
                           ソルバ入力で `frames = <interval>` を指定して記録する)
+  - <prefix>_phase.gif  : 位相 arg(E) の伝搬アニメーション (/field/frames_r/_i がある
+                          場合のみ。`frames = <interval> complex` で記録する)
 
 使い方:
   python3 tools/plot_ixz.py time_series_data.h5 [--prefix out] [--db] [--fps 15]
@@ -54,6 +56,9 @@ def main():
         ei = f["/field/Efinal_i"][:]
         n_out = f["/field/n_out_r"][:] if "/field/n_out_r" in f else None
         frames = f["/field/frames"][:] if "/field/frames" in f else None
+        frames_c = None
+        if "/field/frames_r" in f and "/field/frames_i" in f:
+            frames_c = f["/field/frames_r"][:] + 1j * f["/field/frames_i"][:]
         dx = read_scalar(f, "/metadata/grid_dx")
         dz = read_scalar(f, "/metadata/grid_dz")
         dy = read_scalar(f, "/metadata/grid_dy")
@@ -205,6 +210,34 @@ def main():
     else:
         print("note: /field/frames がないため GIF は生成しません"
               " (入力に `frames = <interval>` を指定すると記録されます)")
+
+    # --- 位相の伝搬アニメーション (複素電界がある場合) ---
+    if frames_c is not None:
+        from matplotlib.animation import FuncAnimation, PillowWriter
+        nfr = frames_c.shape[0]
+        # 強度の低い領域の位相は無意味なので、振幅で不透明度を落として表示する
+        amp = np.abs(frames_c)
+        amax = amp.max() if amp.max() > 0 else 1.0
+        fig, ax = plt.subplots(figsize=(6, 5))
+        im = ax.imshow(np.angle(frames_c[0]), origin="lower", extent=extent_xy(),
+                       cmap="twilight", vmin=-np.pi, vmax=np.pi)
+        im.set_alpha(np.clip(amp[0] / amax * 4.0, 0, 1))
+        ax.set_xlabel(f"x [{unit}]")
+        ax.set_ylabel(f"y [{unit}]")
+        cb = fig.colorbar(im, ax=ax)
+        cb.set_label("arg(E) [rad]")
+
+        def update_ph(i):
+            im.set_data(np.angle(frames_c[i]))
+            im.set_alpha(np.clip(amp[i] / amax * 4.0, 0, 1))
+            z = (i * frame_interval * dz * 1e6) if (dz and frame_interval) else i
+            ax.set_title(f"arg(E(x, y))  z = {z:.1f} {unit if dz else 'frame'}")
+            return [im]
+
+        anim = FuncAnimation(fig, update_ph, frames=nfr, blit=False)
+        anim.save(f"{prefix}_phase.gif", writer=PillowWriter(fps=args.fps))
+        plt.close(fig)
+        print(f"wrote {prefix}_phase.gif ({nfr} frames)")
 
 
 if __name__ == "__main__":

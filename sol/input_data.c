@@ -76,6 +76,7 @@ int input_data(FILE *fp)
 	BPM.wideangle = 0;
 	BPM.tiltx = BPM.tilty = 0;
 	BPM.frames = 0;   // 0 = スナップショット記録なし
+	BPM.framesComplex = 0;
 	BPM.nmodes = 0;   // 0 = モード解析なし
 	BPM.modeExcite = 0;
 	BPM.taper = 1;    // 1 = テーパなし (出口/入口の横方向スケール比)
@@ -522,9 +523,12 @@ int input_data(FILE *fp)
 			if (ntoken > 3) BPM.tilty = atof(token[3]);
 		}
 		else if (!strcmp(strkey, "frames")) {
-			// frames = <interval> : |E(x,y)|^2 スナップショットの記録間隔 [z ステップ]
-			// (0 = 記録なし。/field/frames へ出力し、tools/plot_ixz.py で動画化できる)
+			// frames = <interval> [complex] : |E(x,y)|^2 スナップショットの記録間隔
+			// [z ステップ] (0 = 記録なし。/field/frames へ出力)。
+			// complex 指定時は複素電界も /field/frames_r, /field/frames_i へ出力する
+			// (位相分布の表示用。記憶容量は 3 倍になる)
 			BPM.frames = atoi(token[2]);
+			BPM.framesComplex = ((ntoken > 3) && !strcmp(token[3], "complex")) ? 1 : 0;
 		}
 		else if (!strcmp(strkey, "taper")) {
 			// taper = <ratio> : 出口での横方向スケール比 (入口 = 1)。
