@@ -4,6 +4,8 @@ postbpm.c
 BPM 出力 (time_series_data.h5 の /field) の可視化。
   - /field/Ixz       : 伝搬マップ |E(x, y=Ny/2, z)|^2 (Nz x Nx) → 等高線ページ
   - /field/Efinal_r/i: 最終断面電界 (Ny x Nx) → |E| 等高線ページ
+  - /field/frames    : |E(x,y)|^2 スナップショット (nframes x Ny x Nx)
+                       → 等間隔に最大 BPM_FRAME_PAGES 枚の等高線ページ
 FDTD 用の post が読む obpm.out には含まれないため、ここで HDF5 を直接読む。
 BPM 出力が無い場合 (純粋な FDTD 実行) は何もしない。
 */
@@ -17,6 +19,7 @@ BPM 出力が無い場合 (純粋な FDTD 実行) は何もしない。
 #define BPM_H5_FILE   "time_series_data.h5"
 #define BPM_CSV_FILE  "bpm_ixz.csv"
 #define BPM_DB_RANGE  40.0    /* 等高線のダイナミックレンジ [dB] */
+#define BPM_FRAME_PAGES 6     /* frames から描画する最大ページ数 (等間隔に間引く) */
 
 /* 2次元データセットを読む (呼び出し側で free)。失敗時 NULL */
 static double *read2d(hid_t file, const char *path, hsize_t dims[2])
@@ -219,33 +222,38 @@ int plot2dBpm(void)
 	free(er);
 	free(ei);
 
-	/* ── 伝搬スナップショット frames (nframes x Ny x Nx) ── */
-	/* ソルバ入力で frames = <interval> を指定した場合のみ存在する。   */
-	/* 1 フレーム = 1 ページとし、各ページのタイトルに z 位置を入れる。*/
+	/* ── 伝搬スナップショット frames (nframes x Ny x Nx) ──
+	   入力に frames = <interval> を指定した場合のみ存在する。
+	   全フレームを描くとページ数が過大になるため等間隔に間引き、
+	   各ページのタイトルには (取得できれば) z 位置を入れる。 */
 	hsize_t fd[3];
 	double *frames = read3d(file, "/field/frames", fd);
 	if (frames != NULL) {
 		const int nf = (int)fd[0], ny = (int)fd[1], nx = (int)fd[2];
 		const double interval = readScalar(file, "/metadata/frame_interval", 0);
 		const double dz = readScalar(file, "/metadata/grid_dz", 0);
+		const int npage = (nf < BPM_FRAME_PAGES) ? nf : BPM_FRAME_PAGES;
 		const double x0 = (nx == Nx) ? Xn[0] : 0;
 		const double x1 = (nx == Nx) ? Xn[Nx] : nx;
 		const double y0 = (ny == Ny) ? Yn[0] : 0;
 		const double y1 = (ny == Ny) ? Yn[Ny] : ny;
-		for (int n = 0; n < nf; n++) {
+		for (int p = 0; p < npage; p++) {
+			/* 先頭と末尾を必ず含む等間隔サンプリング */
+			const int idx = (npage > 1) ? (int)((double)p * (nf - 1) / (npage - 1)) : 0;
 			char title[BUFSIZ];
 			if ((interval > 0) && (dz > 0)) {
-				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  z = %.6e [m]",
-				        Zn[0] + (n * interval * dz));
+				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  z = %.6e [m] (frame %d/%d)",
+				        Zn[0] + (idx * interval * dz), idx + 1, nf);
 			}
 			else {
-				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  frame %d / %d", n + 1, nf);
+				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB] (frame %d/%d)", idx + 1, nf);
 			}
-			contourPage(&frames[(size_t)n * ny * nx], ny, nx, title,
+			contourPage(&frames[(size_t)idx * ny * nx], ny, nx, title,
 			            "x[m]", "y[m]", x0, x1, y0, y1);
 			pages++;
 		}
-		printf("BPM: snapshots %d frames (%d x %d)\n", nf, ny, nx);
+		printf("BPM: snapshots %d frames (%d x %d), plotted %d page(s)\n",
+		       nf, ny, nx, npage);
 		free(frames);
 	}
 

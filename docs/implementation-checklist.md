@@ -329,13 +329,19 @@ main に新規変更なし、マーカー走査 0 件。E2E 検証 (ONN/回折/�
 
 ## テスト
 
-`-DWITH_TESTS=ON` で以下の単体テストがビルドされる (`ctest` で実行):
+`-DWITH_TESTS=ON` で以下の 9 テストがビルド/登録される (`ctest` で実行。
+結合テストは h5py/numpy が必要)。最新の一覧と検証内容は ReadMe.md の
+「テスト」節が正となる。
 
 | テスト | 対象 | 検証内容 |
 |---|---|---|
 | `test_wabpm` | `bpm/wabpm.cpp` | 回折 (近軸/広角)・エネルギー保存・吸収減衰・曲げ偏向・半ベクトル整合 |
 | `test_modes` | `bpm/modes.cpp` | LP01/LP11 実効屈折率 (分散方程式の厳密解と比較)・直交性 |
 | `test_allset` | `include/bpm/allset.hpp` | findModes / modeSuperposition / offsetField / tiltField |
+| `test_fdbpm` | `bpm/FDBPMpropagator.c` | スカラー近軸カーネルの回折・エネルギー保存・吸収・ビーム中心保持 |
+| `onn_activation_solver` / `_check` | TPA + powersweep | `activation_curve.csv` を解析解 `T = 1/(1+β(P/A_eff)L)` と比較 (±7%) |
+| `mode_beat_solver` / `_check` | `launch = mode <m1> <m2>` | 伝搬マップ重心のモードビート長を理論値 `λ/Δneff` と比較 (誤差 0.9%) |
+| `wlsweep_check` | `wlsweep = 1` | 掃引結果が最終波長の単独実行と完全一致することを確認 |
 
 ## 補足: 確認したが「対応不要」と判断した項目
 
@@ -418,3 +424,32 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
     よらずほぼ一定 (固有状態) であることを確認。
     既存回帰はすべて不変 (fiber 3.122518e+02、ctest 3 スイート)。
     CUDA 12.0 コンパイル検証済み (実機実行は GPU 待ち)。
+
+---
+
+# main とのマージ (並行ブランチ `claude/openfdtd-implementation-fg2n84` の取り込み)
+
+別セッションが同じ領域を並行実装したため、main とのマージで 11 ファイルが衝突した。
+機能を落とさない方針で以下のとおり解決した。
+
+| ファイル | 解決方針 |
+|---|---|
+| `include/obpm.h` / `sol/input_data.c` | 両側の BPM 構造体フィールドと既定値をすべて残す |
+| `sol/solve_bpm.cpp` | main の波長掃引 (`wlsweep`) ループ構造を採用し、本ブランチの `/trace`・`/field/Iyz`・複素 frames・モード解析の各バッファを掃引ループの**外**へ移設。モード解析は波長依存のため掃引ループ内で毎回解き直す (前回分を `delete[]` してから再確保) |
+| `cuda/solve_bpm.cu` | `launch = mode` (main) と `modes = <n>` (本ブランチ) の両ブロックを併存させる |
+| `post/postbpm.c` | main のページ間引き (最大 6 枚) + 本ブランチの z 位置つきタイトルを合成 |
+| `CLAUDE.md` / `AGENTS.md` | main の構成 (アーキテクチャ地図・Gotchas・CI 節) を土台に、本ブランチの規約・rules 参照・作業の進め方を統合 |
+| `ReadMe.md` | 両側のキーワード行・メタデータ・CI 説明をすべて残す |
+| `.github/workflows/ci.yml` | ONN 検証は main の `tests/check_activation.py` に一本化し、本ブランチの modes/taper/symmetry スモークを 3 OS に追加 |
+| `CMakeLists.txt` / `.claude/settings.json` | 双方の内容を統合 |
+
+- **励振キーワードの競合**: `launch = mode <m> [coef...]` (重ね合わせ可) と
+  `modes = <n> [excite]` (解析 + 基本モード励振) は独立に実装されていた。
+  両方を残し、**併用時は launch を優先**して `excite` を警告つきで無視する
+  (CPU / CUDA とも同一の判定)。解析と `/modes`・`/trace/overlap` の出力は
+  `launch` 併用時も行う。
+- 検証: ctest 9 本 (両ブランチのスイート) 全通過、`data/` 全 18 サンプルが
+  正常終了 + HDF5 出力あり、fiber 回帰 3.122518e+02 が不変。
+  両系統の併用 (`launch` + `modes ... excite` → 警告 + launch 優先) と
+  `wlsweep` + `modes` (波長ごとに neff が 1.447033 → 1.447279 と正しく変化)
+  を実行確認。CUDA 12.0 コンパイル検証済み。

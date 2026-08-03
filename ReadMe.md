@@ -16,12 +16,21 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 | `post/` | ポストプロセッサ `obpm_post` (ev2/ev3、収束・波形プロット)。※下記の既知事項参照 |
 | `include/bpm/` | BPM 共有ヘッダ (`bpm_prototype.h` のプラットフォーム別 complex マクロ等) |
 
-> `obpm_post` は OpenFDTD 由来のポスト処理に加え、BPM が
-> `time_series_data.h5` に書く伝搬マップ (`/field/Ixz`)・最終電界 (`Efinal_*`)・
-> スナップショット (`/field/frames`) の等高線ページを出力します
-> (`post/postbpm.c`)。`/trace` や `/modes` などのグラフ表示は
-> `tools/plot_ixz.py` (PNG/GIF) を使うか、HDF5 を Python (h5py) で直接
-> 読んでください。GUI (OpenFDTD-X) の H5 ビューアからも参照できます。
+> ℹ **既知事項**:
+> - `obpm_post` は OpenFDTD 由来の FDTD 量の描画 (obpm.out ベース) に加え、
+>   BPM が `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`)・
+>   最終電界 (`Efinal_*`)・伝搬スナップショット (`frames`、等間隔に最大 6 枚) の
+>   可視化にも対応しています (`post/postbpm.c`)。
+>   `/trace` や `/modes` などのグラフ表示は `tools/plot_ixz.py` (PNG/GIF) を
+>   使うか、HDF5 を Python (h5py) で直接読んでください。
+>   GUI (OpenFDTD-X) の H5 ビューアからも参照できます。
+> - obpm.out (FDTD 形式、BPM ではほぼゼロの大容量バイナリ) が不要な場合は
+>   ソルバーに `-no-fdtd-out` を付けるとスキップできます
+>   (その場合 `obpm_post` の FDTD 量描画は不可、BPM の H5 出力は影響なし)。
+> - BPM ソルバーで無効な入力キーワード (`planewave`/`point`/`load`/`rfeed`/
+>   `abc = 1`/`pbc`) は実行時に warning を表示して無視します。
+>   波長掃引は `wlsweep = 1` で有効 (省略時は `frequency2` の先頭周波数のみ使用)。
+>   分散性材料 (type 2) は einf 近似です。
 
 ## ビルド
 
@@ -38,11 +47,15 @@ cmake --build build -j
   - `obpm_cuda` は CPU 版と同じ BPM 機能 (beam/refindex/導電率吸収/メッシュ警告/bend/
     beamtilt、広角 `wideangle`・半ベクトル `polarization` を含む) に対応しています。
     スカラー近軸は `bpm/FDBPMpropagator.cu`、広角/半ベクトルは `bpm/wabpm.cu` を使用します。
+  - **`tpa` / `powersweep` (ONN 光活性化関数) と `wlsweep` (波長掃引) は CPU 版のみ**です。CUDA 版で
+    指定した場合は実行時に warning を表示して無視します (CPU 版 `obpm` を使用してください)。
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
-- MPI 版: `-DWITH_MPI=ON` (要 MPI)
-  - **MPI 版は OpenFDTD 由来の FDTD (時間領域) ソルバのみで、BPM は未対応です**。
-    BPM の並列化は OpenMP (CPU 版 `obpm`) または CUDA 版 `obpm_cuda` を使用してください
-    (BPM の ADI は z 方向に逐次のため、MPI 領域分割は転置通信が必要で費用対効果が低い)。
+- MPI 版: `-DWITH_MPI=ON` (要 MPI + 並列 HDF5。例: `libopenmpi-dev libhdf5-openmpi-dev`)
+  - `obpm_mpi` は OpenFDTD 由来の **FDTD 時間領域ソルバー (BPM ではない)**。
+    `mpirun -np <N> ./bin/obpm_mpi <input>.ofd` で実行します。
+  - **BPM は MPI 未対応**です。BPM の並列化は OpenMP (CPU 版 `obpm`) または
+    CUDA 版 `obpm_cuda` を使用してください (BPM の ADI は z 方向に逐次のため、
+    MPI 領域分割は転置通信が必要で費用対効果が低い)。
 
 ## 可視化
 
@@ -92,6 +105,7 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
 解析解と比較する単体テストを `tests/` に用意しています。
 
 ```sh
+pip install h5py numpy   # 結合テスト (mode_beat / wlsweep) が HDF5 を読むため
 cmake -S . -B build -DWITH_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -102,6 +116,10 @@ ctest --test-dir build --output-on-failure
 | `test_wabpm` | 自由空間ガウシアン回折 `w(z)=w0*sqrt(1+(z/zR)^2)` (近軸/広角)、エネルギー保存、吸収減衰 `exp(-2*k0*n''*z)`、曲げ偏向 `<x>=z^2/(2*RoC)`、半ベクトル差分の一様媒質整合 |
 | `test_modes` | ステップインデックスファイバ LP01/LP11 の実効屈折率 (分散方程式の厳密解と比較)、モード直交性 |
 | `test_allset` | `findModes` / `modeSuperposition` / `offsetField` / `tiltField` (P_Struct API) |
+| `test_fdbpm` | スカラー近軸カーネル (既定経路, `bpm/FDBPMpropagator.c`) の自由空間回折 `w(z)`、エネルギー保存、一様吸収 `exp(-2*k0*n''*z)`、ビーム中心保持 |
+| `mode_beat_solver` / `_check` | 多モード重ね合わせ励振の結合テスト。`data/fiber_mode_superposition.ofd` を実行し、伝搬マップの重心軌跡から求めたモードビート長を理論値 `lambda/\|neff0-neff1\|` と比較 (実測 5710um / 理論 5762um, 誤差 0.9%)。電力保存も検査 (`tests/check_modes_beat.py`) |
+| `wlsweep_check` | 波長掃引の結合テスト。`data/spectrum_sweep.ofd` の掃引結果が、最終波長を単独指定した実行と**完全一致**することを確認 (波長ごとの再設定に取りこぼしが無いことの検証)。`spectrum.csv` の点数・`lambda*f = c` も検査 (`tests/check_wlsweep.py`) |
+| `onn_activation_solver` / `_check` | ONN 光活性化関数の結合テスト。`data/sample/onn_activation.ofd` を実行し、`activation_curve.csv` を解析解 `T = 1/(1 + beta*(P_in/A_eff)*L)` と比較 (相対 7% 以内)。単調非増加・飽和・`P_out <= P_in` も検査 (`tests/check_activation.py`、CI の 3 OS でも同一スクリプトを使用) |
 
 ## 実行
 
@@ -111,6 +129,9 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `data/fiber.ofd` | 光ファイバ (SMF-28 相当, コア半径 4.1um, V=2.26 シングルモード)。LP01 モードの閉じ込め (Marcuse 近似 w=4.7um と比較可能) |
 | `data/fiber_offset.ofd` | 光ファイバへの軸ずれ入射 (2um オフセット)。コア中心への引き込みと結合損失 |
+| `data/spectrum_sweep.ofd` | 波長掃引 (`wlsweep = 1`、1.50-1.60um の 5 点)。`spectrum.csv` に透過率スペクトルを出力 |
+| `data/fiber_mode.ofd` | SMF の基本モード励振 (`launch = mode 0`)。虚軸伝搬法で求めた LP01 を初期界にし、ガウシアン励振より放射損の少ない定常伝搬 |
+| `data/fiber_mode_superposition.ofd` | MMF の LP01+LP11 重ね合わせ励振 (`launch = mode 0 1`)。モードビート (実測周期 5710um / 理論 λ/Δneff = 5762um) |
 | `data/fiber_mmf.ofd` | マルチモードファイバ (コア径 50um, NA=0.2, V=20.3)。オフセット励振によるコア内反射と閉じ込め |
 | `data/fiber_splice.ofd` | コア径不整合の融着接続 (4.1um -> 2.0um)。接続点でのモード変換と放射 (理論 T=0.83) |
 | `data/fiber_gap.ofd` | コネクタ間隙 (40um)。間隙での回折とファイバ再入射時の LP01 再整定 |
@@ -136,7 +157,9 @@ ctest --test-dir build --output-on-failure
   (`/field/Efinal_r`, `/field/Efinal_i` : 最終電界、`/field/n_out_r` : 屈折率分布、
   `/field/Ixz` : 伝搬マップ |E(x, y=Ny/2, z)|^2 (Nz x Nx)、
   `/field/Iyz` : 伝搬マップ |E(x=Nx/2, y, z)|^2 (Nz x Ny)、
-  `/metadata/lambda`, `/metadata/n_0`, `/metadata/beam_w0` : BPM パラメータ)。
+  `/metadata/lambda`, `/metadata/n_0`, `/metadata/beam_w0` : BPM パラメータ、
+  `/metadata/mode_neff` : モード励振 (`launch = mode`) 時の実効屈折率
+  (ガウシアン励振では 0))。
 
 #### 伝搬に沿った時系列データ (`/trace`) — GUI 表示用
 
@@ -170,12 +193,14 @@ z によらずほぼ一定になり、テーパ/ツイスト/曲げではモー�
 | `bend` | `bend = <RoC[m]> [<dir[deg]> [<rho_e>]]` | 曲げ半径 (等価屈折率法 n_eq = n*exp(x/RoC))。dir は曲げ方向 (0 = +x)、rho_e は弾性光学係数。省略時は直線 |
 | `polarization` | `polarization = <scalar\|x\|y>` | 半ベクトル BPM の偏波方向。x/y 指定時は偏波方向の界面で D 法線成分連続 (Stern 差分) を反映。省略時はスカラー |
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
-| `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ) |
+| `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ)。`launch = mode` / `modes = ... excite` と併用した場合はモード界にも同じ位相ランプが適用される |
 | `frames` | `frames = <interval> [complex]` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。`complex` 指定時は複素電界も `/field/frames_r`, `/field/frames_i` へ出力 (位相表示用、容量 3 倍)。省略時 (0) は記録なし |
 | `taper` | `taper = <ratio>` | 出口での横方向スケール比 (入口 = 1)。屈折率分布を z に沿って相似縮小/拡大する (座標変換)。省略時 1 |
 | `twist` | `twist = <rate[deg/m]>` | 導波路のツイスト率。屈折率分布を z に沿って回転させる。省略時 0 |
 | `symmetry` | `symmetry = <x\|y\|xy> [sym\|anti]` | 対称境界。指定軸のメッシュ始端を鏡像面とし計算領域を 1/2〜1/4 に削減 (既定 sym)。**メッシュ・出力とも半領域**になる。省略時は対称境界なし |
 | `modes` | `modes = <nModes> [excite]` | 入力断面のモード解析 (虚軸伝搬法)。導波条件 (n_clad < neff) を満たすモードを neff 降順に求め、`/modes/mode<i>` と `/modes/neff` に出力。`excite` 指定で入射ビームを基本モードに置き換え (モード整合励振)。省略時は解析なし |
+| `launch` | `launch = <gauss\|mode [<m>[:<coef>] ...]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モードを虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (引数省略時は基本モード 0)。複数指定すると**重ね合わせ**、`<m>:<coef>` で係数を与える (省略時 1、最大 8 モード)。入力電力は係数に依らず `feed` 電圧^2 に正規化されるため係数は分岐比のみを決める。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
+| `wlsweep` | `wlsweep = <0\|1>` | 波長掃引。`frequency2` の全点を順に計算し、各波長の透過率を `spectrum.csv` (lambda_m, frequency_Hz, transmission) へ出力する。`/field` と HDF5 メタデータは**最終波長**の結果。省略時 (0) は先頭波長のみ = 従来動作。**CPU 版のみ** |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
 | `powersweep` | `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log\|lin]` | 入力パワー掃引 (既定 lin)。`activation_curve.csv` に P_out(P_in) を出力。省略時は従来の単発計算 |
 
@@ -262,16 +287,39 @@ z によらずほぼ一定になり、テーパ/ツイスト/曲げではモー�
 
 ## CI / Release
 
-- push / PR ごとに Linux (gcc) と macOS (AppleClang + Homebrew libomp/Eigen)
-  で CPU ビルド + `data/sample/fiber.ofd` のスモーク実行 (`normal end` 判定)
-- 解析解と比較する単体テスト (`ctest` : test_wabpm / test_modes / test_allset) を
-  Linux / macOS で実行
-- `data/sample/onn_activation.ofd` の ONN 活性化関数スモーク
-  (`activation_curve.csv` の単調飽和 + 平面波近似の解析解
-  `T = 1/(1 + beta*(P_in/A_eff)*L)` との ±8% 一致判定, `tools/check_activation.sh`)
-  を 3 OS で実行 (解析解判定は Linux / macOS)
-- ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64`) に保存
+GitHub Actions で以下のジョブを実行します。トリガーは **main への push・タグ push・
+PR (base = main)・手動実行 (workflow_dispatch)** です。
+
+| ジョブ | 実行条件 | 内容 |
+|---|---|---|
+| `build-cpu` (Linux/gcc) | すべて | CPU ビルド + `ctest` + `fiber.ofd` スモーク + `data/` 全サンプルスモーク + ONN 活性化関数の定量検証 |
+| `build-macos` (AppleClang + Homebrew libomp/Eigen) | **PR 以外** (main push / タグ / 手動) | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
+| `build-windows` (MSVC + Ninja + vcpkg) | すべて | CPU ビルド + `ctest` + スモーク + ONN 定量検証 |
+| `build-cuda` | すべて | CUDA Toolkit を導入し `obpm_cuda` のコンパイル・リンクを検証 (ランナーに GPU は無いため実行はしない) |
+| `build-mpi` | すべて | MPI + 並列 HDF5 を導入し全ターゲット (`obpm` / `obpm_post` / `obpm_mpi`) のビルドを検証 |
+
+- ONN 活性化関数の検証は各 OS とも `tests/check_activation.py` (解析解との
+  相対 7% 比較) を使用します
+- 3 OS とも以下の解析解スモークを実行します:
+  - モード解析 (`fiber_modes.ofd`): LP01 の neff が分散方程式の厳密解
+    1.447167 と ±5e-4、モード整合励振の結合率 η_1 > 0.99
+  - テーパ/ツイスト (`taper_twist.ofd`): 合計回転角のログと断熱的な電力保存
+  - 対称境界 (`fiber_symmetry.ofd`): 半領域計算の出力パワー
+- ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64` /
+  `obpm-windows-x64`) に保存
 - `v*` タグを push すると GitHub Release にバイナリが自動添付されます
+
+> ℹ **Actions 課金についての注記** (private リポジトリの無料枠は月 2,000 分、
+> macOS ×10 / Windows ×2 換算):
+> - push トリガーを main とタグに限定しています。作業ブランチは PR イベント側で
+>   カバーされるため、PR を持つブランチでの二重実行 (push + pull_request) は
+>   発生しません。PR の無いブランチは workflow_dispatch で手動実行できます。
+> - 同一ブランチへの連続 push は `concurrency` により古い run を自動キャンセルします。
+> - 課金レートが最も高い macOS ジョブは PR では実行しません (上表)。
+> - **全ジョブが数秒で failure になる場合** (`runner_id: 0`、ステップ実行なし、
+>   ログ 404) はコードではなく無料枠の枯渇・課金設定が原因です。最小ワークフロー
+>   `Ping` (`.github/workflows/ping.yml`、echo のみ) を手動実行すると 1 分未満で
+>   切り分けられます。
 
 ## 姉妹リポジトリ
 

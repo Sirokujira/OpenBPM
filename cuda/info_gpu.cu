@@ -18,7 +18,8 @@ void info_gpu(FILE *fp, int device, int gpu, int um)
 			getchar();
 			exit(1);
 		}
-		sprintf(str, "GPU : %s, U.M.%s, device=%d", msg, (um ? "ON" : "OFF"), device);
+		// str と msg が同サイズのため sprintf ではオーバーフローしうる
+		snprintf(str, sizeof(str), "GPU : %s, U.M.%s, device=%d", msg, (um ? "ON" : "OFF"), device);
 		fprintf(fp,     "%s\n", str);
 		fprintf(stdout, "%s\n", str);
 		fflush(fp);

@@ -2,12 +2,23 @@
 # CUDA/MPI はランナーに無いため WITH_CUDA=OFF / WITH_MPI=OFF でビルドする。
 name: CI
 
+# 課金対策 (private リポジトリは Actions 無料枠 2,000 分/月):
+# - 以前は push (claude/**) と pull_request の両方が発火し、PR を持つブランチでは
+#   同一コミットで全ジョブが 2 回走っていた → push は main とタグのみに限定。
+#   作業ブランチは PR イベント側でカバーする (PR の無いブランチは workflow_dispatch で
+#   手動実行できる)。
+# - concurrency で同一 ref の旧 run をキャンセルし、連続 push の重複消費を防ぐ。
 on:
   push:
-    branches: [ main, "claude/**" ]
+    branches: [ main ]
     tags: [ "v*" ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build-cpu:
@@ -29,8 +40,11 @@ jobs:
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(nproc)"
 
-      # 解析解と比較する単体テスト (test_wabpm / test_modes / test_allset)
-      - name: Unit tests (ctest)
+      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う
+      - name: Install test dependencies
+        run: python3 -m pip install --upgrade h5py numpy
+
+      - name: Unit tests (解析解との比較検証)
         run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
@@ -46,8 +60,21 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
-      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の単調飽和と
-      # 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) との数値一致 (±8%) を判定する
+      # data/ 直下の全サンプルを実行し HDF5 出力と正常終了を確認する
+      # (obpm.out は不要なので -no-fdtd-out でスキップ)
+      - name: Smoke test — all samples
+        run: |
+          mkdir -p /tmp/smoke-all && cd /tmp/smoke-all
+          for f in "$GITHUB_WORKSPACE"/data/*.ofd; do
+            echo "== $(basename "$f") =="
+            "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out "$f" > run.log 2>&1 || { tail -20 run.log; exit 1; }
+            grep -q "normal end" obpm.log
+            test -s time_series_data.h5
+            rm -f obpm.log time_series_data.h5 run.log
+          done
+
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv を生成し、
+      # 平面波近似の解析解との一致 (相対 7% 以内) ・単調非増加・飽和を検証する
       - name: Smoke test — ONN activation curve (TPA + powersweep)
         run: |
           mkdir -p /tmp/smoke-onn && cp data/sample/onn_activation.ofd /tmp/smoke-onn/
@@ -55,7 +82,9 @@ jobs:
           "$GITHUB_WORKSPACE/bin/obpm" -n 2 onn_activation.ofd
           grep -q "normal end" obpm.log
           test -s activation_curve.csv
-          sh "$GITHUB_WORKSPACE/tools/check_activation.sh" activation_curve.csv obpm.log
+          # 定量検証: 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) と比較
+          # (単調性・飽和・P_out<=P_in も併せて検査。Python 標準ライブラリのみ)
+          python3 "$GITHUB_WORKSPACE/tests/check_activation.py" --dir .
 
       # モード解析 (modes = <n> excite) : シングルモードで LP01 のみ導波と判定され、
       # neff が分散方程式の厳密解 1.447167 と一致すること (±5e-4)
@@ -135,6 +164,10 @@ jobs:
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
   # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
   build-macos:
+    # macOS ランナーは課金レート x10 (private リポジトリ) で最も高価なため、
+    # main への push・タグ・手動実行のみに限定する (PR では実行しない)。
+    # PR 段階の移植性は build-windows (MSVC, x2) が主に担保している。
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
@@ -145,10 +178,14 @@ jobs:
       - name: Install dependencies
         run: brew install libomp hdf5 eigen
 
+      # Python3_EXECUTABLE は pip install と同じ PATH の python3 に固定する
+      # (FindPython3 が別のインタプリタを拾うと ctest で h5py が import 不能になる。
+      #  Windows で実際に発生したのと同じ問題の予防)
       - name: Configure (CPU only)
         run: |
           OMP="$(brew --prefix libomp)"
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON \
+            -DPython3_EXECUTABLE="$(command -v python3)" \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
             -DOpenMP_C_LIB_NAMES=omp \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
@@ -158,8 +195,13 @@ jobs:
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
 
-      # 解析解と比較する単体テスト (test_wabpm / test_modes / test_allset)
-      - name: Unit tests (ctest)
+      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う。
+      # macOS ランナーの python3 は PEP 668 (externally-managed) で pip install を
+      # 拒否するため --break-system-packages を付ける (使い捨ての CI 環境なので可)
+      - name: Install test dependencies
+        run: python3 -m pip install --break-system-packages --upgrade h5py numpy
+
+      - name: Unit tests (解析解との比較検証)
         run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
@@ -175,8 +217,8 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
-      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の単調飽和と
-      # 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) との数値一致 (±8%) を判定する
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv を生成し、
+      # 平面波近似の解析解との一致 (相対 7% 以内) ・単調非増加・飽和を検証する
       - name: Smoke test — ONN activation curve (TPA + powersweep)
         run: |
           mkdir -p /tmp/smoke-onn && cp data/sample/onn_activation.ofd /tmp/smoke-onn/
@@ -184,7 +226,9 @@ jobs:
           "$GITHUB_WORKSPACE/bin/obpm" -n 2 onn_activation.ofd
           grep -q "normal end" obpm.log
           test -s activation_curve.csv
-          sh "$GITHUB_WORKSPACE/tools/check_activation.sh" activation_curve.csv obpm.log
+          # 定量検証: 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) と比較
+          # (単調性・飽和・P_out<=P_in も併せて検査。Python 標準ライブラリのみ)
+          python3 "$GITHUB_WORKSPACE/tests/check_activation.py" --dir .
 
       # モード解析 (modes = <n> excite) : シングルモードで LP01 のみ導波と判定され、
       # neff が分散方程式の厳密解 1.447167 と一致すること (±5e-4)
@@ -277,18 +321,25 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Python3_EXECUTABLE を PATH の python に固定する。CMake の FindPython3 は
+      # hostedtoolcache 内の最新版 (pip install した python と別物) を拾うことが
+      # あり、ctest の h5py/numpy を使うテストが import エラーになる (実際に発生)
       - name: Configure (CPU only)
         run: >
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
+          "-DPython3_EXECUTABLE=$((Get-Command python).Source)"
           "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
 
       - name: Build obpm / obpm_post
         run: cmake --build build
 
-      # 解析解と比較する単体テスト (Linux/macOS と同一の 3 スイート)
-      - name: Unit tests (ctest)
+      # ctest の一部 (mode_beat / wlsweep) は HDF5 を読むため h5py/numpy を使う
+      - name: Install test dependencies
+        run: python -m pip install --upgrade h5py numpy
+
+      - name: Unit tests (解析解との比較検証)
         run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test — solver (fiber sample)
@@ -308,8 +359,8 @@ jobs:
           Set-Location smoke
           if (-not (Test-Path bpm_ixz.csv)) { Write-Error "bpm_ixz.csv missing"; exit 1 }
 
-      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv の生成と
-      # 単調飽和 (T が P_in について単調非増加、初点 T > 終点 T*1.5) を判定する
+      # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv を生成し、
+      # 平面波近似の解析解との一致 (相対 7% 以内) ・単調非増加・飽和を検証する
       - name: Smoke test — ONN activation curve (TPA + powersweep)
         run: |
           New-Item -ItemType Directory -Force smoke-onn | Out-Null
@@ -319,23 +370,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           if (-not (Select-String -Path obpm.log -Pattern "normal end" -Quiet)) { Write-Error "no normal end"; exit 1 }
           if (-not (Test-Path activation_curve.csv)) { Write-Error "activation_curve.csv missing"; exit 1 }
-          $t = Import-Csv activation_curve.csv | ForEach-Object { [double]$_.transmission }
-          if ($t.Count -lt 8) { Write-Error "too few sweep points: $($t.Count)"; exit 1 }
-          for ($i = 1; $i -lt $t.Count; $i++) {
-            if ($t[$i] -gt $t[$i-1] * 1.000001) { Write-Error "not monotone at point $i"; exit 1 }
-          }
-          if (-not ($t[0] -gt $t[-1] * 1.5)) { Write-Error "no saturation: first=$($t[0]), last=$($t[-1])"; exit 1 }
-          Write-Output "activation curve OK: T $($t[0]) -> $($t[-1])"
+          # 定量検証: 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) と比較
+          # (3 OS で同一の検証スクリプトを使う。Python 標準ライブラリのみ)
+          python "$env:GITHUB_WORKSPACE\tests\check_activation.py" --dir .
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      # 解析解との数値一致判定 (Git Bash で Linux/macOS と同一のスクリプト・判定を使う)
-      # - ONN 活性化曲線: T = 1/(1 + beta*(P_in/A_eff)*L) と ±8%
+      # 解析解との数値一致判定 (Git Bash で Linux/macOS と同一の判定を使う)
+      # ONN 活性化曲線は直前のステップで tests/check_activation.py が検証済み。
       # - モード解析: LP01 neff が分散方程式の厳密解 1.447167 と ±5e-4
-      - name: Check vs analytic solutions (ONN curve + mode analysis)
+      # - モード結合率 / テーパ・ツイスト / 対称境界
+      - name: Check vs analytic solutions (mode analysis / taper / symmetry)
         shell: bash
         run: |
-          cd smoke-onn
-          sh ../tools/check_activation.sh activation_curve.csv obpm.log
-          mkdir -p ../smoke-modes && cd ../smoke-modes
+          mkdir -p smoke-modes && cd smoke-modes
           cp ../data/sample/fiber_modes.ofd .
           ../bin/obpm.exe -n 2 fiber_modes.ofd
           grep -q "normal end" obpm.log
@@ -397,3 +444,44 @@ jobs:
             smoke-onn/*.log
             smoke-rcwa/*.log
           if-no-files-found: ignore
+
+  # CUDA 版のコンパイル・リンク検証 (ランナーに GPU は無いため実行はしない)
+  build-cuda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (incl. CUDA toolkit)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc g++ libhdf5-dev libeigen3-dev nvidia-cuda-toolkit
+
+      - name: Configure (CUDA)
+        run: cmake -B build_cuda -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_MPI=OFF
+
+      - name: Build obpm_cuda (compile/link only)
+        run: cmake --build build_cuda --target obpm_cuda -j"$(nproc)"
+
+  # MPI 版 (obpm_mpi = OpenFDTD 由来の FDTD ソルバー) のビルド検証。
+  # mpi/solve.c は並列 HDF5 (H5Pset_fapl_mpio 等) を使うため libhdf5-openmpi-dev が必要。
+  build-mpi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (MPI + parallel HDF5)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc g++ libeigen3-dev \
+            libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
+
+      - name: Configure (MPI)
+        run: cmake -B build_mpi -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=ON
+
+      # obpm_mpi だけでなく全ターゲットをビルドする。並列 HDF5 のヘッダは
+      # mpi.h を include するため、MPI を使わない obpm / obpm_post 側が
+      # 壊れていても --target obpm_mpi では検知できない (実際に起きた)。
+      - name: Build all targets (obpm / obpm_post / obpm_mpi)
+        run: cmake --build build_mpi -j"$(nproc)"

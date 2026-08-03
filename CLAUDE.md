@@ -1,70 +1,143 @@
-# OpenBPM プロジェクトメモリ
+# OpenBPM 開発ガイド (Claude Code 用)
 
-OpenFDTD のコード構造 (入力・メッシュ・材料・後処理) を元にしたビーム伝搬法 (BPM)
-ソルバー。伝搬カーネルは BPM-MATLAB の FDBPM (Douglas-Gunn ADI) を移植したもの。
+OpenFDTD のコード構造 (入力・メッシュ・材料・後処理) を土台にしたビーム伝搬法 (BPM)
+光導波路ソルバー (C/C++)。伝搬カーネルは BPM-MATLAB の FDBPM (Douglas-Gunn ADI)
+移植 + 独自拡張 (広角 Pade(1,1) / 半ベクトル / モードソルバ / TPA 非線形 /
+波長掃引 / テーパ・ツイスト / 対称境界)。
 OpenFDTD-X (GUI) から QProcess で起動される処理カーネルでもある。
 ドキュメント・コメント・コミットメッセージは**日本語**で書く。
 
 > 他エージェント (Codex 等) 向けに同内容を集約した `AGENTS.md` がある。
 > 本ファイルまたは `.claude/rules/*.md` の規約を変更したら `AGENTS.md` も更新すること。
 
-## ビルド / テスト / 実行
+## ビルド・テスト (まずこれが通ることを確認)
 
 ```sh
-# ビルド (実行ファイルは bin/ に出力: obpm, obpm_post)
-cmake -S . -B build -DWITH_TESTS=ON
+# 依存: cmake >= 3.18, gcc/g++, libhdf5-dev, libeigen3-dev (+ OpenMP)
+# 実行ファイルは bin/ に出力 (obpm, obpm_post)
+cmake -S . -B build -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 cmake --build build -j
-
-# 単体テスト (解析解との比較検証)
-ctest --test-dir build --output-on-failure
-
-# サンプル実行 (結果は time_series_data.h5)
-./bin/obpm data/fiber.ofd
-
-# 可視化 (PNG / GIF)
-python3 tools/plot_ixz.py time_series_data.h5
-
-# ONN 活性化曲線の解析解検証 (CI と同じ判定)
-sh tools/check_activation.sh activation_curve.csv obpm.log
+ctest --test-dir build --output-on-failure   # 解析解との比較検証 (9本、要 h5py/numpy)
 ```
 
-- 依存: CMake >= 3.18, C/C++ コンパイラ, Eigen3, HDF5, OpenMP
-- オプション: `-DWITH_CUDA=ON` (CUDA 版 obpm_cuda), `-DWITH_MPI=ON` (FDTD のみ)
-- 回帰の基準値: `data/sample/fiber.ofd` は output power = 3.122518e+02 が不変で
-  あること (機能追加で既存入力の結果を変えない)
+```sh
+# 回帰 (fiber): output power = 3.122518e+02 が不変、
+# obpm_post 後の bpm_ixz.csv が変更前と md5 一致であること
+mkdir -p /tmp/smoke && cp data/sample/fiber.ofd /tmp/smoke/ && cd /tmp/smoke
+$OLDPWD/bin/obpm -n 2 fiber.ofd && $OLDPWD/bin/obpm_post -n 2 fiber.ofd
+grep "normal end" obpm.log
 
-## ディレクトリ構成
+# ONN 活性化 (TPA + powersweep): activation_curve.csv が単調非増加で
+# 解析解 T = 1/(1 + β(P/A_eff)L) と ±7% (A_eff・L はログ出力を使う)
+cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activation.ofd
+sh $OLDPWD/tools/check_activation.sh activation_curve.csv obpm.log
 
-| パス | 内容 |
+# 可視化 (PNG / GIF): 伝搬マップ・/trace グラフ・モード形状・結合率
+python3 tools/plot_ixz.py time_series_data.h5
+```
+
+- CUDA 版: `-DWITH_CUDA=ON` → `obpm_cuda` (nvcc 必要。GPU 実機がない環境では
+  コンパイル/リンク確認まで)
+- MPI 版: `-DWITH_MPI=ON` (要 libopenmpi-dev + **libhdf5-openmpi-dev**)。
+  `obpm_mpi` は **FDTD ソルバーであり BPM ではない**
+
+## アーキテクチャ地図
+
+| パス | 役割 |
 |---|---|
-| `sol/` | CPU ソルバー本体。BPM の入口は `sol/solve_bpm.cpp` |
-| `bpm/` | BPM カーネル。近軸 `FDBPMpropagator.c`、広角/半ベクトル `wabpm.cpp`、モードソルバ `modes.cpp` |
-| `cuda/` | CUDA 版。BPM は `cuda/solve_bpm.cu` + `bpm/*.cu` |
-| `mpi/`, `cuda_mpi/` | MPI 版 (FDTD のみ、BPM 未対応) |
+| `src/sol_Main.cpp` | `obpm` エントリ。入力読込 → `solve_bpm()` → `outputChars()`/`writeout()` |
+| `sol/solve_bpm.cpp` | BPM 本体 (CPU)。屈折率構築→励振→伝搬 (近軸/広角)→HDF5 出力 |
+| `cuda/solve_bpm.cu` | 同 CUDA 版。**sol 側と鏡写しに保つこと** (下記ルール参照) |
+| `bpm/FDBPMpropagator.c/.cu` | スカラー近軸カーネル (BPM-MATLAB 移植、改変は上流照合必須) |
+| `bpm/wabpm.cpp/.cu` | 広角/半ベクトルの一般化 ADI (倍精度) |
+| `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` と `modes = <n>` から使用 |
+| `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
 | `include/` | ヘッダ。グローバル状態は `obpm.h` (EXTERN パターン)、BPM API は `include/bpm/` |
-| `post/` | 後処理 (obpm_post)。BPM 出力は `postbpm.c` |
-| `tests/` | 単体テスト (フレームワーク非依存の自己完結ハーネス) |
-| `tools/` | Python 可視化・CI 検証スクリプト |
+| `post/postbpm.c` | obpm_post の BPM (/field) 可視化 |
+| `mpi/`, `cuda_mpi/` | MPI 版 (FDTD のみ、BPM 未対応) |
+| `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN 活性化 / モードビート / 波長掃引) |
+| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証スクリプト (`check_activation.sh`) |
 | `data/` | OpenFDTD 形式 (.ofd) のサンプル入力。理論値との比較ポイントをコメントに記載 |
 | `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |
 
-## 重要な規約 (詳細は .claude/rules/ 参照)
+出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/Iyz`,
+`/field/frames`, `/trace/*`, `/modes/*`, `/metadata/*`)
++ `obpm.out` (FDTD 形式。obpm_post の入力。`-no-fdtd-out` で省略可)
++ `activation_curve.csv` (`powersweep` 指定時) / `spectrum.csv` (`wlsweep` 指定時)
+
+## 重要ルール (詳細は @.claude/rules/ を参照)
+
+- @.claude/rules/physics-validation.md
+- @.claude/rules/keyword-wiring.md
+- @.claude/rules/bpm-physics.md
+- @.claude/rules/cuda.md
+- @.claude/rules/testing.md
+- @.claude/rules/portability.md
+
+## 移植性の絶対規則 (Windows/macOS CI で実際に踏んだもの)
+
+- **C99 VLA 禁止** (MSVC)。`malloc` + 明示インデックスで書く。
+- 複素数は `CREALF` / `CIMAGF` マクロ経由でアクセスする
+  (MSVC では C ソースが C++ / `std::complex<float>` としてビルドされる)。
+  `complex × double` の直接乗算を書かない (`complex × float` は可)。
+- libm は `MATH_LIB` 変数経由。MSVC フラグは既存 CMake ブロックに従う。
+- C は C99、C++ は C++17。ソースは UTF-8 (MSVC は /utf-8)。
+- 暗黙の関数宣言を残さない (macOS AppleClang はエラー扱い)。
+
+## 重要な規約
 
 - **検証第一**: 数値カーネルの変更は必ず解析解 (回折・減衰・分散方程式など) と
   比較して検証する。既存テストの許容誤差を緩めて通すのは禁止。
-- **後方互換**: 入力キーワードの省略時は従来動作と一致させる (fiber 回帰を壊さない)。
+- **後方互換**: 入力キーは `sol/input_data.c` に追加し、**省略時は従来動作と
+  バイト一致** (fiber 回帰を壊さない)。
 - **複素屈折率の符号**: `n_mat` は損失を +imag で保持。物理符号は `n = nr - i*ni`
   (伝搬計算前に符号を反転する)。混同すると増幅になる。
+- **物理スケーリング規約**: `tpa`/`powersweep` 使用時のみ場を
+  ∫∫|E|²dA = P_in [W] に正規化 (|E|² = 強度 I)。未使用時は従来の
+  無次元場のまま。
 - **CPU 両経路 + CUDA パリティ**: 物理の追加は CPU の近軸/拡張の**両経路**に入れる
-  (片方だけは不可)。CUDA 未対応の場合は実行時警告 + ReadMe への明記が必須
-  (サイレント無視は禁止)。
-- **移植性**: C99 VLA 禁止・複素数は `CREALF`/`CIMAGF` マクロ経由など、
-  MSVC/macOS で実際に踏んだ規則を `.claude/rules/portability.md` に集約。
+  (片方だけは不可)。CUDA 版 (`obpm_cuda`) の対応状況を ReadMe.md に明記し、
+  未対応キーワードは**実行時 warning を出す** (サイレント無視は禁止)。
 - **入力キーワード追加**: `include/obpm.h` の BPM 構造体 → `sol/input_data.c` の
   既定値と解析 → ReadMe.md のキーワード表、の 3 点セット。新機能には
   `data/sample/` の検証ケースと CI スモーク (3 OS) を付ける。
 - **HDF5 出力**: `/field/*` (Ny×Nx 行優先) と `/metadata/*` (スカラー)。
   新規データセット追加時は `tools/plot_ixz.py` と `post/postbpm.c` の対応も検討。
+
+## Gotchas (このリポジトリ固有のハマりどころ)
+
+- **main が並行して進む**: 別セッションの PR が main へ随時マージされる。
+  作業開始時と push 前に必ず `git fetch origin main` して分岐を確認する
+  (`/sync-check` コマンド、SessionStart フックが自動表示)。
+- **obpm_post は obpm.out を必須入力にする**: BPM の既定出力から obpm.out を
+  消してはいけない (97MB でも既定 ON。省略はユーザーの `-no-fdtd-out` 判断)。
+- **`I` マクロ**: `bpm_prototype.h` が複素虚数単位 `I` を定義している。
+  変数名に `I` を使わない。虚数単位をキャストで自作しない (過去に実数 1.0 に
+  なる事故があった)。
+- **励振キーワードは 2 系統ある**: `launch = mode <m> [coef...]` (重ね合わせ可) と
+  `modes = <n> [excite]` (解析 + 基本モード励振)。併用時は **launch を優先**し
+  `excite` を無視する (警告を出す)。
+- **Dt/Tw は setup() が自動計算する**: 「ユーザーが指定したか」の判定に
+  `Dt != 0` 等は使えない。
+- **CI は obpm.log の "normal end" と HDF5 の存在を検証する**: 終了メッセージや
+  ファイル名を変えるときは CI (linux/macOS/Windows の 3 OS ジョブ) も併せて更新する。
+- **CI 全ジョブが数秒で failure ならコードではない**: private リポジトリの
+  Actions 無料枠 (月 2,000 分、macOS ×10 換算) の枯渇。症状は `runner_id: 0`・
+  ステップ実行なし・ログ 404。`Ping` ワークフロー (echo のみ) の手動実行で
+  1 分未満で切り分けられる。ワークフロー YAML の構文エラーなら conclusion が
+  `startup_failure` になるので区別できる。
+- **並列 HDF5 のヘッダは mpi.h を要求する**: `WITH_MPI=ON` では MPI を使わない
+  `obpm`/`obpm_post` もビルドが壊れるため、CMakeLists が `HDF5::HDF5` に
+  `MPI::MPI_C` を伝播させている。CI の build-mpi は全ターゲットをビルドして
+  これを検知する (`--target obpm_mpi` だけでは素通りする)。
+- **メッシュ配列**: `Xn/Yn/Zn` は節点 (要素数 N+1)、`Xc/Yc/Zc` はセル中心。
+  セル幅は `(Xn[Nx]-Xn[0])/Nx` (演算子優先順位のバグが過去に複数あった)。
+
+## コード規約
+
+- 既存ファイルのインデント流儀に合わせる (sol/ · cuda/ はタブ、bpm/ は 4 空白)。
+- コメントは日本語で可 (既存に合わせる)。
+- コミットメッセージは日本語、末尾に検証内容 (何をどう確認したか) を書く。
 
 ## 作業の進め方
 
@@ -74,3 +147,16 @@ sh tools/check_activation.sh activation_curve.csv obpm.log
   その旨をコミット/チェックリストに明記する。
 - コミットメッセージは日本語で「何を・なぜ」を要約し、検証結果 (テスト通過・
   解析解との誤差) を本文に含める。
+
+## CI
+
+`.github/workflows/ci.yml`: Linux / macOS / Windows (MSVC + Ninja +
+vcpkg `hdf5[core,zlib]:x64-windows-static-md`) の 3 OS + CUDA / MPI ビルド検証の
+計 5 ジョブ。3 OS とも ctest を実行、Linux は data/ 全サンプルのスモークも実行。
+タグ `v*` で Release 添付。
+
+課金対策 (private リポジトリの無料枠節約) のため:
+- push トリガーは main とタグのみ。作業ブランチは PR イベントでカバー
+  (二重実行の防止)。PR の無いブランチは workflow_dispatch で手動実行
+- build-macos (課金 ×10) は PR では skip (main push / タグ / 手動のみ)
+- `ping.yml` (Ping) はランナー割り当て診断用の最小ワークフロー (echo のみ)

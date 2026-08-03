@@ -6,9 +6,18 @@
       "Bash(ctest:*)",
       "Bash(make:*)",
       "Bash(ninja:*)",
+      "Bash(bin/obpm:*)",
+      "Bash(bin/obpm_post:*)",
+      "Bash(bin/obpm_cuda:*)",
+      "Bash(./bin/obpm:*)",
+      "Bash(./bin/obpm_post:*)",
+      "Bash(python3 tests/*)",
+      "Bash(python3 tools/*)",
       "Bash(git status:*)",
-      "Bash(git diff:*)",
       "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git fetch:*)",
+      "Bash(git branch:*)",
       "Bash(git show:*)",
       "Bash(grep:*)",
       "Bash(rg:*)",
@@ -18,12 +27,25 @@
       "Bash(bin/obpm:*)",
       "Bash(bin/obpm_post:*)",
       "Bash(python3 tools/plot_ixz.py:*)",
-      "Bash(sh tools/check_activation.sh:*)"
+      "Bash(sh tools/check_activation.sh:*)",
+      "Bash(h5dump:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
       "Bash(git push -f:*)"
     ]
   },
-  "includeCoAuthoredBy": true
+  "includeCoAuthoredBy": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
 }

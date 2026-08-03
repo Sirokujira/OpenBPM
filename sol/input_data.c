@@ -83,6 +83,9 @@ int input_data(FILE *fp)
 	BPM.twist = 0;    // 0 = ツイストなし [deg/m]
 	BPM.symx = 0;     // 0 = 対称境界なし
 	BPM.symy = 0;
+	BPM.launchMode = -1;  // -1 = ガウシアン励振 (既定)
+	BPM.launchNModes = 0; // 0 = ガウシアン励振
+	BPM.wlsweep = 0;      // 0 = 先頭波長のみ (既定)
 
 	// 非線形吸収 (TPA) と入力パワー掃引 (省略時は従来動作 = 線形単発)
 	NTpaB = 0;
@@ -557,6 +560,57 @@ int input_data(FILE *fp)
 			// excite 指定で入射ビームを基本モードに置き換える (モード整合励振)
 			BPM.nmodes = atoi(token[2]);
 			BPM.modeExcite = ((ntoken > 3) && !strcmp(token[3], "excite")) ? 1 : 0;
+		}
+		else if (!strcmp(strkey, "launch")) {
+			// launch = gauss | mode [<m>[:<coef>] ...] : 励振方法 (既定 gauss)
+			// mode 指定時は先頭スライスの屈折率分布から導波モードを虚軸伝搬法で
+			// 求めて励振する (m 省略時は基本モード 0)。複数指定すると重ね合わせ、
+			// <m>:<coef> で係数を与える (省略時 1)。入力電力は feed 電圧^2 に
+			// 正規化されるため、係数は分岐比のみを決める
+			if      (!strcmp(token[2], "mode")) {
+				BPM.launchNModes = 0;
+				for (int n = 3; n < ntoken; n++) {
+					if (BPM.launchNModes >= BPM_MAX_LAUNCH_MODES) {
+						printf(errfmt2, strkey);
+						return 1;
+					}
+					// "<m>" または "<m>:<coef>"
+					char *sep = strchr(token[n], ':');
+					double coef = 1;
+					if (sep != NULL) {
+						*sep = '\0';
+						coef = atof(sep + 1);
+					}
+					const int idx = atoi(token[n]);
+					if ((idx < 0) || (coef == 0)) {
+						printf(errfmt2, strkey);
+						return 1;
+					}
+					BPM.launchIdx[BPM.launchNModes] = idx;
+					BPM.launchCoef[BPM.launchNModes] = coef;
+					BPM.launchNModes++;
+				}
+				if (BPM.launchNModes == 0) {
+					// 引数省略時は基本モード
+					BPM.launchIdx[0] = 0;
+					BPM.launchCoef[0] = 1;
+					BPM.launchNModes = 1;
+				}
+				BPM.launchMode = BPM.launchIdx[0];
+			}
+			else if (!strcmp(token[2], "gauss")) {
+				BPM.launchMode = -1;
+				BPM.launchNModes = 0;
+			}
+			else {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+		}
+		else if (!strcmp(strkey, "wlsweep")) {
+			// wlsweep = <0|1> : 波長掃引 (frequency2 の全点を順に計算する)
+			// 省略時 (0) は先頭周波数のみ = 従来動作
+			BPM.wlsweep = atoi(token[2]);
 		}
 		else if (!strcmp(strkey, "tpa")) {
 			// tpa = <material id> <beta[cm/GW]> : 二光子吸収 (TPA) 係数

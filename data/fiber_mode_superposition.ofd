@@ -1,0 +1,53 @@
+# OpenBPM sample : multimode fiber, LP01 + LP11 mode superposition
+#
+# 多モード重ね合わせ励振 (launch = mode 0 1) によるモードビートの実演。
+# コア構成は data/fiber_mmf.ofd と同一 (SI-MMF, コア径 50um, NA=0.2)。
+#
+# 求まる 2 モードの実効屈折率 (ソルバーのログに出力される):
+#   LP01 : neff = 1.457609   LP11 : neff = 1.457340
+# 2 モードの重ね合わせは差の位相が進むにつれ横方向に振動する (モードビート):
+#   L_beat = lambda / (neff0 - neff1) = 1.55um / 2.69e-4 = 5762 um
+#
+# 入力電力は係数に依らず feed 電圧^2 に正規化されるため、係数は分岐比のみを
+# 決める (launch = mode 0:1 1:0.5 のように重みを変えられる)。
+#
+# 期待される動作 (z = 8000um まで伸ばした場合の実測):
+#   1. ビーム重心が +-9.1um で横方向に振動する
+#   2. 振動周期 5710um が理論ビート長 5762um と 0.9% で一致する
+#   3. 電力は保存される (P/P0 = 0.9999969)
+OpenBPM 2 2
+title = MMF LP01+LP11 superposition (BPM sample)
+
+xmesh = -35e-6 140 35e-6
+ymesh = -35e-6 140 35e-6
+zmesh = 0 600 600e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>  (id starts at 2)
+# クラッド (n = 1.4440)
+material = 1 2.085136 0 1 0
+# コア (n = 1.4578, NA = 0.2)
+material = 1 2.125136 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+geometry = 2 1 -35e-6 35e-6 -35e-6 35e-6 0 600e-6
+# コア : Z 軸円柱 直径 50um
+geometry = 3 13 -25e-6 25e-6 -25e-6 25e-6 0 600e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+beam = 5e-6
+
+# launch = mode <m>[:<coef>] ... : 導波モードの重ね合わせ励振
+# (係数省略時は 1。入力電力は feed 電圧^2 に正規化される)
+launch = mode 0 1
+
+# refindex = <n0>
+refindex = 1.444
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

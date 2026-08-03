@@ -10,7 +10,7 @@ solver
 
 #include "obpm_prototype.h"
 
-static void args(int, char *[], int *, int *, char [], char []);
+static void args(int, char *[], int *, int *, int *, char [], char []);
 static void error_check(int, int);
 
 int main(int argc, char *argv[])
@@ -30,9 +30,10 @@ int main(int argc, char *argv[])
 	VECTOR = 0;
 	int nthread = 1;
 	int prompt = 0;
+	int fdtd_out = 1;  // -no-fdtd-out 指定時は FDTD 形式の obpm.out (BPM ではほぼゼロの大容量) を書かない
 	char fn_in[BUFSIZ] = "";
 	char fn_out[BUFSIZ] = "obpm.out";
-	args(argc, argv, &nthread, &prompt, fn_in, fn_out);
+	args(argc, argv, &nthread, &prompt, &fdtd_out, fn_in, fn_out);
 	//printf("%d %d %s %s\n", nthread, prompt, fn_in, fn_out);
 
 	// set number of threads
@@ -112,17 +113,21 @@ int main(int argc, char *argv[])
 		// calculation and output
 		outputChars(fp_log);
 
-		// output filenames
-		monitor3(fp_log, FN_log, fn_out);
+		// write obpm.out (OpenFDTD 形式)。BPM の結果は time_series_data.h5 にあり、
+		// obpm.out は obpm_post の入力用。-no-fdtd-out 指定時はスキップする
+		// (~100MB 級のほぼゼロの FDTD バイナリを書かない)。
+		if (fdtd_out) {
+			// output filenames
+			monitor3(fp_log, FN_log, fn_out);
 
-		// write obpm.out
-		if ((fp_out = fopen(fn_out, "wb")) == NULL) {
-			printf(errfmt, fn_out);
-			ierr = 1;
-		}
-		if (!ierr) {
-			writeout(fp_out);
-			fclose(fp_out);
+			if ((fp_out = fopen(fn_out, "wb")) == NULL) {
+				printf(errfmt, fn_out);
+				ierr = 1;
+			}
+			if (!ierr) {
+				writeout(fp_out);
+				fclose(fp_out);
+			}
 		}
 	}
 	error_check(ierr, prompt);
@@ -152,9 +157,9 @@ int main(int argc, char *argv[])
 
 
 static void args(int argc, char *argv[],
-	int *nthread, int *prompt, char fn_in[], char fn_out[])
+	int *nthread, int *prompt, int *fdtd_out, char fn_in[], char fn_out[])
 {
-	const char usage[] = "Usage : obpm [-n <thread>] [-no-vector|-vector] [-out <outfile>] <datafile>";
+	const char usage[] = "Usage : obpm [-n <thread>] [-no-vector|-vector] [-no-fdtd-out] [-out <outfile>] <datafile>";
 
 	if (argc < 2) {
 		printf("%s\n", usage);
@@ -180,6 +185,9 @@ static void args(int argc, char *argv[],
 		}
 		else if (!strcmp(*argv, "-prompt")) {
 			*prompt = 1;
+		}
+		else if (!strcmp(*argv, "-no-fdtd-out")) {
+			*fdtd_out = 0;
 		}
 		else if (!strcmp(*argv, "-out")) {
 			argc--;

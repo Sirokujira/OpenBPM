@@ -54,6 +54,9 @@ extern "C" {
 #define EPS    (1e-6)
 #define EPS2   (EPS*EPS)
 #define DTOR   (PI/180)
+
+// launch = mode で重ね合わせられるモードの最大数
+#define BPM_MAX_LAUNCH_MODES 8
 #define PEC    (1)
 
 #define NA(i,j,k) ((i)*Ni+(j)*Nj+(k)*Nk+N0)
@@ -245,6 +248,11 @@ EXTERN struct {
 	double twist;             // twist rate [deg/m] (0 = no twist)
 	int    symx;              // mirror at x = xmin : 0 = none, 1 = symmetric, 2 = anti
 	int    symy;              // mirror at y = ymin : 0 = none, 1 = symmetric, 2 = anti
+	int    launchMode;        // launch: -1 = gaussian (default), >=0 = guided mode #m (先頭モード)
+	int    wlsweep;           // 1 = sweep all frequency2 points (0 = first only, default)
+	int    launchNModes;      // number of superposed modes (0 = gaussian)
+	int    launchIdx[BPM_MAX_LAUNCH_MODES];    // mode indices
+	double launchCoef[BPM_MAX_LAUNCH_MODES];   // superposition coefficients
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {
