@@ -86,6 +86,51 @@ jobs:
           # (単調性・飽和・P_out<=P_in も併せて検査。Python 標準ライブラリのみ)
           python3 "$GITHUB_WORKSPACE/tests/check_activation.py" --dir .
 
+      # モード解析 (modes = <n> excite) : シングルモードで LP01 のみ導波と判定され、
+      # neff が分散方程式の厳密解 1.447167 と一致すること (±5e-4)
+      - name: Smoke test — mode analysis (modes keyword)
+        run: |
+          mkdir -p /tmp/smoke-modes && cp data/sample/fiber_modes.ofd /tmp/smoke-modes/
+          cd /tmp/smoke-modes
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 fiber_modes.ofd
+          grep -q "normal end" obpm.log
+          grep -q "modes : 1 / 3 converged" obpm.log
+          awk '/mode 1 : neff/ { err = $NF - 1.447167; if (err < 0) err = -err
+               if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
+               print "mode analysis OK: neff = " $NF; ok = 1 }
+               END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+          # モード結合率 (/trace/overlap) : モード整合励振なので出口でも eta_1 > 0.99
+          awk '/overlap eta_1/ { e = $(NF-3) + 0
+               if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
+               print "mode overlap OK: eta_1 = " e; ok = 1 }
+               END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
+
+      # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
+      # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
+      - name: Smoke test — taper / twist (coordinate transform)
+        run: |
+          mkdir -p /tmp/smoke-tt && cp data/sample/taper_twist.ofd /tmp/smoke-tt/
+          cd /tmp/smoke-tt
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 taper_twist.ofd
+          grep -q "normal end" obpm.log
+          grep -q "total 90.00 \[deg\]" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
+               print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
+      # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になることを判定する
+      - name: Smoke test — symmetry boundary
+        run: |
+          mkdir -p /tmp/smoke-sym && cp data/sample/fiber_symmetry.ofd /tmp/smoke-sym/
+          cd /tmp/smoke-sym
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 fiber_symmetry.ofd
+          grep -q "normal end" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 155.0 || p > 157.5) { print "FAIL: output power " p " out of [155.0,157.5]"; exit 1 }
+               print "symmetry OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -184,6 +229,51 @@ jobs:
           # 定量検証: 平面波近似の解析解 T = 1/(1 + beta*(P_in/A_eff)*L) と比較
           # (単調性・飽和・P_out<=P_in も併せて検査。Python 標準ライブラリのみ)
           python3 "$GITHUB_WORKSPACE/tests/check_activation.py" --dir .
+
+      # モード解析 (modes = <n> excite) : シングルモードで LP01 のみ導波と判定され、
+      # neff が分散方程式の厳密解 1.447167 と一致すること (±5e-4)
+      - name: Smoke test — mode analysis (modes keyword)
+        run: |
+          mkdir -p /tmp/smoke-modes && cp data/sample/fiber_modes.ofd /tmp/smoke-modes/
+          cd /tmp/smoke-modes
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 fiber_modes.ofd
+          grep -q "normal end" obpm.log
+          grep -q "modes : 1 / 3 converged" obpm.log
+          awk '/mode 1 : neff/ { err = $NF - 1.447167; if (err < 0) err = -err
+               if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
+               print "mode analysis OK: neff = " $NF; ok = 1 }
+               END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+          # モード結合率 (/trace/overlap) : モード整合励振なので出口でも eta_1 > 0.99
+          awk '/overlap eta_1/ { e = $(NF-3) + 0
+               if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
+               print "mode overlap OK: eta_1 = " e; ok = 1 }
+               END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
+
+      # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
+      # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
+      - name: Smoke test — taper / twist (coordinate transform)
+        run: |
+          mkdir -p /tmp/smoke-tt && cp data/sample/taper_twist.ofd /tmp/smoke-tt/
+          cd /tmp/smoke-tt
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 taper_twist.ofd
+          grep -q "normal end" obpm.log
+          grep -q "total 90.00 \[deg\]" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
+               print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
+      # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になることを判定する
+      - name: Smoke test — symmetry boundary
+        run: |
+          mkdir -p /tmp/smoke-sym && cp data/sample/fiber_symmetry.ofd /tmp/smoke-sym/
+          cd /tmp/smoke-sym
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 fiber_symmetry.ofd
+          grep -q "normal end" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 155.0 || p > 157.5) { print "FAIL: output power " p " out of [155.0,157.5]"; exit 1 }
+               print "symmetry OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
@@ -284,6 +374,47 @@ jobs:
           # (3 OS で同一の検証スクリプトを使う。Python 標準ライブラリのみ)
           python "$env:GITHUB_WORKSPACE\tests\check_activation.py" --dir .
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # 解析解との数値一致判定 (Git Bash で Linux/macOS と同一の判定を使う)
+      # ONN 活性化曲線は直前のステップで tests/check_activation.py が検証済み。
+      # - モード解析: LP01 neff が分散方程式の厳密解 1.447167 と ±5e-4
+      # - モード結合率 / テーパ・ツイスト / 対称境界
+      - name: Check vs analytic solutions (mode analysis / taper / symmetry)
+        shell: bash
+        run: |
+          mkdir -p smoke-modes && cd smoke-modes
+          cp ../data/sample/fiber_modes.ofd .
+          ../bin/obpm.exe -n 2 fiber_modes.ofd
+          grep -q "normal end" obpm.log
+          grep -q "modes : 1 / 3 converged" obpm.log
+          awk '/mode 1 : neff/ { err = $NF - 1.447167; if (err < 0) err = -err
+               if (err > 5e-4) { print "FAIL: neff " $NF " != 1.447167 (err " err ")"; exit 1 }
+               print "mode analysis OK: neff = " $NF; ok = 1 }
+               END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+          # モード結合率 (/trace/overlap) : モード整合励振なので出口でも eta_1 > 0.99
+          awk '/overlap eta_1/ { e = $(NF-3) + 0
+               if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
+               print "mode overlap OK: eta_1 = " e; ok = 1 }
+               END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
+          # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
+          mkdir -p ../smoke-tt && cd ../smoke-tt
+          cp ../data/sample/taper_twist.ofd .
+          ../bin/obpm.exe -n 2 taper_twist.ofd
+          grep -q "normal end" obpm.log
+          grep -q "total 90.00 \[deg\]" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
+               print "taper/twist OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+          # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になること
+          mkdir -p ../smoke-sym && cd ../smoke-sym
+          cp ../data/sample/fiber_symmetry.ofd .
+          ../bin/obpm.exe -n 2 fiber_symmetry.ofd
+          grep -q "normal end" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p < 155.0 || p > 157.5) { print "FAIL: output power " p " out of range"; exit 1 }
+               print "symmetry OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4

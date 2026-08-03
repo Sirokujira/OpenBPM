@@ -21,8 +21,9 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 >   BPM が `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`)・
 >   最終電界 (`Efinal_*`)・伝搬スナップショット (`frames`、等間隔に最大 6 枚) の
 >   可視化にも対応しています (`post/postbpm.c`)。
->   HDF5 を Python (h5py) で直接読む・GUI (OpenFDTD-X) の H5 ビューアで
->   参照することも可能です。
+>   `/trace` や `/modes` などのグラフ表示は `tools/plot_ixz.py` (PNG/GIF) を
+>   使うか、HDF5 を Python (h5py) で直接読んでください。
+>   GUI (OpenFDTD-X) の H5 ビューアからも参照できます。
 > - obpm.out (FDTD 形式、BPM ではほぼゼロの大容量バイナリ) が不要な場合は
 >   ソルバーに `-no-fdtd-out` を付けるとスキップできます
 >   (その場合 `obpm_post` の FDTD 量描画は不可、BPM の H5 出力は影響なし)。
@@ -52,6 +53,9 @@ cmake --build build -j
 - MPI 版: `-DWITH_MPI=ON` (要 MPI + 並列 HDF5。例: `libopenmpi-dev libhdf5-openmpi-dev`)
   - `obpm_mpi` は OpenFDTD 由来の **FDTD 時間領域ソルバー (BPM ではない)**。
     `mpirun -np <N> ./bin/obpm_mpi <input>.ofd` で実行します。
+  - **BPM は MPI 未対応**です。BPM の並列化は OpenMP (CPU 版 `obpm`) または
+    CUDA 版 `obpm_cuda` を使用してください (BPM の ADI は z 方向に逐次のため、
+    MPI 領域分割は転置通信が必要で費用対効果が低い)。
 
 ## 可視化
 
@@ -64,15 +68,37 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
 
 - `*_ixz.png` : 伝搬マップ `/field/Ixz` のヒートマップ
 - `*_final.png` : 最終電界 `|E(x,y)|^2` と屈折率分布
+- `*_trace.png` : z ごとのスカラー推移 (`/trace` : 断面パワー・ピーク強度・重心・ビーム幅)
+- `*_overlap.png` : 各導波モードへのパワー占有率の z 推移 (`/trace/overlap`。
+  入力に `modes = <nModes>` を指定した場合のみ)
+- `*_modes.png` : 導波モード形状と neff (入力に `modes = <nModes>` を指定して
+  `/modes` を出力した場合のみ)
 - `*_prop.gif` : `|E(x,y)|^2` の伝搬アニメーション (入力に `frames = <interval>` を
   指定して `/field/frames` を記録した場合のみ)
+- `*_phase.gif` : 位相 `arg(E)` の伝搬アニメーション (`frames = <interval> complex` で
+  `/field/frames_r`, `/field/frames_i` を記録した場合のみ)
 
 ## モード解析
 
 虚軸伝搬法 (imaginary-distance BPM) + Gram-Schmidt 直交化によるモードソルバを
-`bpm/modes.cpp` (`wabpm_find_modes`) に実装しています。実効屈折率の降順に導波モードを
-求め、neff は Rayleigh 商から算出します。`include/bpm/allset.hpp` の `findModes()`
-(BPM-MATLAB 互換 API) はこのソルバを使用します。
+`bpm/modes.cpp` (`wabpm_find_modes`) に実装しています。実効屈折率の降順に導波モード
+(n_clad < neff を満たすもののみ) を求め、neff は Rayleigh 商から算出します。
+
+- 入力キーワード **`modes = <nModes> [excite]`** で `obpm` / `obpm_cuda` から実行できます
+  (CUDA 版もホスト側で同一の解析を実行)。結果は obpm.log (`mode <i> : neff = ...`) と
+  HDF5 (`/modes/mode<i>` : Ny×Nx 実数場、`/modes/neff`) に出力されます。
+  解析は入力断面 (z 始端) の屈折率分布に対して行い、曲げ (bend) は反映しません。
+  半ベクトルの直交化は近似となるためスカラー演算子で解析します。
+- `excite` を付けると入射ビームがガウシアンではなく数値的に厳密な基本モードに
+  置き換わります (モード整合励振)。サンプル `data/sample/fiber_modes.ofd` では
+  LP01 の neff = 1.447167 が分散方程式の厳密解と一致し、電力保存が
+  T = 0.99999 (ガウシアン励振では 0.99988) に向上します。
+- `modes` 指定時は伝搬中の**モード結合率** η_m(z) も `/trace/overlap` に記録されます。
+  「基本モードにどれだけパワーが残っているか」を z の関数として GUI 表示できます
+  (`tools/plot_ixz.py` の `*_overlap.png`)。`fiber_modes.ofd` では
+  `excite` 指定時 η_1 ≈ 0.9999、ガウシアン励振では η_1 ≈ 0.9938 となります。
+- `include/bpm/allset.hpp` の `findModes()` (BPM-MATLAB 互換 API) も同じソルバを
+  使用します。
 
 ## テスト
 
@@ -130,9 +156,33 @@ ctest --test-dir build --output-on-failure
 - 結果は `time_series_data.h5` (HDF5) に出力されます
   (`/field/Efinal_r`, `/field/Efinal_i` : 最終電界、`/field/n_out_r` : 屈折率分布、
   `/field/Ixz` : 伝搬マップ |E(x, y=Ny/2, z)|^2 (Nz x Nx)、
+  `/field/Iyz` : 伝搬マップ |E(x=Nx/2, y, z)|^2 (Nz x Ny)、
   `/metadata/lambda`, `/metadata/n_0`, `/metadata/beam_w0` : BPM パラメータ、
   `/metadata/mode_neff` : モード励振 (`launch = mode`) 時の実効屈折率
   (ガウシアン励振では 0))。
+
+#### 伝搬に沿った時系列データ (`/trace`) — GUI 表示用
+
+z ステップごとの断面統計量を 1 次元配列 (長さ = 伝搬ステップ数) で出力します。
+画面側でそのままグラフ表示できます (`tools/plot_ixz.py` の `*_trace.png` も参照)。
+
+| データセット | 内容 |
+|---|---|
+| `/trace/z` | 断面位置 z [m] (t 番目のステップ実行後) |
+| `/trace/power` | 断面の総パワー ∫∫\|E\|^2 dA (`tpa`/`powersweep` 使用時は [W]) |
+| `/trace/peak` | \|E\|^2 の最大値 |
+| `/trace/centroid_x`, `/trace/centroid_y` | 強度重心 [m] |
+| `/trace/width_x`, `/trace/width_y` | 強度の 2 次モーメント幅 2σ [m] |
+| `/trace/overlap` | 各導波モードへのパワー占有率 η_m(z) (nModes x Nz)。`modes = <n>` 指定時のみ |
+
+`/trace/overlap` は η_m = \|<φ_m, E>\|^2 / (\|\|φ_m\|\|^2 \|\|E\|\|^2) で、
+モード順序は `/modes/neff` と同じ (実効屈折率の降順)。直線導波路では各 η_m は
+z によらずほぼ一定になり、テーパ/ツイスト/曲げではモード間の変換が推移として現れます。
+Σ_m η_m < 1 のぶんが放射モード (非導波成分) です。
+
+座標軸は `/metadata/Xc`, `Yc`, `Zc` (セル中心) と `Xn`, `Yn`, `Zn` (節点) を使用できます。
+`/trace` と `/field/Iyz` は常に出力され、CPU 版・CUDA 版で同一内容です
+(CUDA 版はデバイス上で集計するため転送コストは断面 1 行/列ぶんに収まります)。
 
 ### BPM 用キーワード (OpenFDTD 形式の拡張)
 
@@ -143,8 +193,12 @@ ctest --test-dir build --output-on-failure
 | `bend` | `bend = <RoC[m]> [<dir[deg]> [<rho_e>]]` | 曲げ半径 (等価屈折率法 n_eq = n*exp(x/RoC))。dir は曲げ方向 (0 = +x)、rho_e は弾性光学係数。省略時は直線 |
 | `polarization` | `polarization = <scalar\|x\|y>` | 半ベクトル BPM の偏波方向。x/y 指定時は偏波方向の界面で D 法線成分連続 (Stern 差分) を反映。省略時はスカラー |
 | `wideangle` | `wideangle = <0\|1>` | 広角 BPM (Pade(1,1))。屈折率項を演算子内部に含めた一般化 ADI で伝搬。省略時は近軸 |
-| `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ)。`launch = mode` と併用した場合はモード界にも同じ位相ランプが適用される |
-| `frames` | `frames = <interval>` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。省略時 (0) は記録なし |
+| `beamtilt` | `beamtilt = <tx[deg]> [<ty[deg]>]` | 入射ビームの傾き (横方向波数の位相ランプ)。`launch = mode` / `modes = ... excite` と併用した場合はモード界にも同じ位相ランプが適用される |
+| `frames` | `frames = <interval> [complex]` | `|E(x,y)|^2` スナップショットの記録間隔 (z ステップ単位)。`/field/frames` (nframes x Ny x Nx) へ出力。`complex` 指定時は複素電界も `/field/frames_r`, `/field/frames_i` へ出力 (位相表示用、容量 3 倍)。省略時 (0) は記録なし |
+| `taper` | `taper = <ratio>` | 出口での横方向スケール比 (入口 = 1)。屈折率分布を z に沿って相似縮小/拡大する (座標変換)。省略時 1 |
+| `twist` | `twist = <rate[deg/m]>` | 導波路のツイスト率。屈折率分布を z に沿って回転させる。省略時 0 |
+| `symmetry` | `symmetry = <x\|y\|xy> [sym\|anti]` | 対称境界。指定軸のメッシュ始端を鏡像面とし計算領域を 1/2〜1/4 に削減 (既定 sym)。**メッシュ・出力とも半領域**になる。省略時は対称境界なし |
+| `modes` | `modes = <nModes> [excite]` | 入力断面のモード解析 (虚軸伝搬法)。導波条件 (n_clad < neff) を満たすモードを neff 降順に求め、`/modes/mode<i>` と `/modes/neff` に出力。`excite` 指定で入射ビームを基本モードに置き換え (モード整合励振)。省略時は解析なし |
 | `launch` | `launch = <gauss\|mode [<m>[:<coef>] ...]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モードを虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (引数省略時は基本モード 0)。複数指定すると**重ね合わせ**、`<m>:<coef>` で係数を与える (省略時 1、最大 8 モード)。入力電力は係数に依らず `feed` 電圧^2 に正規化されるため係数は分岐比のみを決める。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
 | `wlsweep` | `wlsweep = <0\|1>` | 波長掃引。`frequency2` の全点を順に計算し、各波長の透過率を `spectrum.csv` (lambda_m, frequency_Hz, transmission) へ出力する。`/field` と HDF5 メタデータは**最終波長**の結果。省略時 (0) は先頭波長のみ = 従来動作。**CPU 版のみ** |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
@@ -156,6 +210,42 @@ ctest --test-dir build --output-on-failure
 
 - `feed` の電圧はビーム振幅として使用されます。
 - メッシュは等間隔を推奨します (不均一の場合は平均セル幅で計算し警告を表示)。
+
+### 対称境界 (計算領域の削減)
+
+`symmetry` を指定すると、指定軸のメッシュ始端を鏡像面として計算領域を 1/2〜1/4 に
+削減できます (物理は変わらず計算量だけが減ります)。
+
+- **メッシュには半領域のみを与え、出力も半領域になります** (例: `xmesh = 0 45 15e-6`)。
+  出力パワーも全領域の 1/2 (両軸なら 1/4) になります。
+- 鏡像面はセル中心の半セル手前 (= メッシュ始端) です。セル中心が始端から dx/2, 3dx/2, ...
+  に並ぶため、半領域の格子は全領域の該当半分と厳密に一致します。
+- `sym` (既定) は対称、`anti` は反対称 (鏡像面で符号反転) です。
+- CPU の近軸・拡張 (広角/半ベクトル) の両経路と CUDA 版に実装されています。
+- 検証: 一様媒質 (厳密に対称な構造) で半領域/1/4 領域の結果が全領域の該当部分と一致
+  (近軸 2e-6 = float32 の丸め、拡張パスは倍精度で**厳密に 0**)。
+  サンプル `data/sample/fiber_symmetry.ofd` (ファイバを x 半領域で計算、
+  全領域の右半分と 3.5e-6 で一致し出力パワーは正確に 1/2)。
+- ⚠ **離散化後の**構造が鏡像面について対称である必要があります。OpenFDTD 由来の
+  形状ラスタライズは y 方向に半セルの非対称性を生じるため (円形コアでも上下反転と
+  6.4e-3 の差)、y 対称面を使う場合は `/field/n_out_r` が実際に対称かを確認してください。
+
+### テーパ / ツイスト (座標変換)
+
+`taper` / `twist` を指定すると、屈折率分布を伝搬に沿って相似縮小・回転させます
+(BPM-MATLAB の座標変換方式)。`geometry` を z 方向に階段近似する必要がありません
+(対比: `data/fiber_taper.ofd` は階段近似)。
+
+- **指定時は入力断面 (z 始端) の 2D 分布のみを参照します**。`geometry` 自体の
+  z 変化とは併用できません (入力断面が変換されて全 z に適用されます)。
+- スケール係数は `1 - (1-ratio)*(iz/Nz)`、回転角は `twist * z` です。
+  `bend` / `wideangle` / `polarization` とは併用可能で、CPU の近軸・拡張の
+  両経路と CUDA 版に実装されています。
+- サンプル: `data/sample/taper_twist.ofd` (矩形コア 8x2um を 0.5 倍に縮小しつつ
+  200um で 90 度回転)。出力屈折率分布 `/field/n_out_r` が実際に縮小・回転したもの
+  になり (主軸 89.1 度 / 理論 90 度)、変換は断熱的で電力が保存します (P/P0 = 0.9985)。
+- 検証: 一様媒質では変換を掛けても結果不変 (拡張パスは倍精度で厳密一致)、
+  円形コアの taper では出力コア半径が `a*ratio` に一致 (2.08um / 理論 2.05um)。
 
 ### ONN 光活性化関数 (非線形吸収 TPA + パワー掃引)
 
@@ -189,7 +279,11 @@ ctest --test-dir build --output-on-failure
   解析解との差が拡大します (平面波近似の限界)。
 - `/field` 出力 (Ixz/Efinal/frames) は最終掃引点 (最大パワー) の結果です。
 - `wideangle` / `polarization` の一般化伝搬エンジンとも併用できます。
-  CUDA 版 (`obpm_cuda`) は現状 `tpa` / `powersweep` に未対応です (無視されます)。
+- CUDA 版 (`obpm_cuda`) も `tpa` / `powersweep` に対応しています
+  (近軸パスは TPA カーネル + 電力簿記の補正、拡張パスは `bpm/wabpm.cu` の TPA カーネル。
+  掃引ループ・物理スケーリング・A_eff・CSV 出力はホスト側で CPU 版と同一処理)。
+  **ビルドは CUDA 12.0 で確認済みですが、GPU 実機での実行検証は未実施です**
+  (数値検証済みなのは CPU 版。実機がある場合は CPU 版との一致確認を推奨)。
 
 ## CI / Release
 
@@ -206,6 +300,11 @@ PR (base = main)・手動実行 (workflow_dispatch)** です。
 
 - ONN 活性化関数の検証は各 OS とも `tests/check_activation.py` (解析解との
   相対 7% 比較) を使用します
+- 3 OS とも以下の解析解スモークを実行します:
+  - モード解析 (`fiber_modes.ofd`): LP01 の neff が分散方程式の厳密解
+    1.447167 と ±5e-4、モード整合励振の結合率 η_1 > 0.99
+  - テーパ/ツイスト (`taper_twist.ofd`): 合計回転角のログと断熱的な電力保存
+  - 対称境界 (`fiber_symmetry.ofd`): 半領域計算の出力パワー
 - ビルド成果物は artifact (`obpm-linux-x64` / `obpm-macos-arm64` /
   `obpm-windows-x64`) に保存
 - `v*` タグを push すると GitHub Release にバイナリが自動添付されます

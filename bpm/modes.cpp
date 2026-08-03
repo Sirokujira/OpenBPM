@@ -51,14 +51,16 @@ static void deflate(cplx *E, const cplx *modes, int m, long N)
 	}
 }
 
-// Rayleigh 商から実効屈折率を算出
-static double rayleigh_neff(const wabpm_params *W, const cplx *E, const cplx *n2, cplx *work)
+// Rayleigh 商から neff^2 に相当する量 v = n0^2 + mu/k0^2 を返す
+// (クランプしない : 非導波状態では負にもなる。収束判定はこの生の値で行う。
+//  クランプした値で判定すると、連続して同じ値に丸められた非導波状態を
+//  「収束」と誤判定してモード探索が即座に打ち切られてしまう)
+static double rayleigh_v(const wabpm_params *W, const cplx *E, const cplx *n2, cplx *work)
 {
 	const long N = (long)W->Nx * W->Ny;
 	wabpm_apply_P(W, E, n2, work);
 	const double mu = dot(E, work, N).real() / dot(E, E, N).real();
-	const double v = W->n0 * W->n0 + mu / (W->k0 * W->k0);
-	return (v > 0) ? std::sqrt(v) : 0.0;
+	return (W->n0 * W->n0) + (mu / (W->k0 * W->k0));
 }
 
 int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
@@ -94,25 +96,34 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 		deflate(E, modes, m, N);
 		normalize(E, N);
 
-		double neff_prev = 0.0;
+		const double v0 = W->n0 * W->n0;   // 導波条件のしきい値 (neff > n0)
+		double v_prev = 0.0;
 		int converged = 0;
+		int unguided = 0;
 		for (int it = 0; it < maxIter; it++) {
 			wabpm_imagdist_step(W, E, n2);
 			deflate(E, modes, m, N);
 			if (normalize(E, N) == 0.0) break;   // 部分空間が尽きた
 
-			const double ne = rayleigh_neff(W, E, n2, work);
-			if (it > 0 && std::fabs(ne - neff_prev) < tol) {
-				neff_prev = ne;
+			const double v = rayleigh_v(W, E, n2, work);
+			// 十分反復しても導波条件に達しないままなら残りは放射状態 :
+			// これ以上のモードは存在しないため打ち切る
+			if (it >= 2000 && v <= v0) {
+				unguided = 1;
+				break;
+			}
+			if (it > 0 && std::fabs(v - v_prev) < tol) {
+				v_prev = v;
 				converged = 1;
 				break;
 			}
-			neff_prev = ne;
+			v_prev = v;
 		}
-		if (!converged) break;
+		// 導波条件 (n0 < neff) を満たすモードのみ採用する
+		if (!converged || unguided || v_prev <= v0) break;
 
 		std::memcpy(&modes[(size_t)m * N], E, (size_t)N * sizeof(cplx));
-		neff[m] = neff_prev;
+		neff[m] = std::sqrt(v_prev);
 		found++;
 	}
 

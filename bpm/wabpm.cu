@@ -39,6 +39,9 @@ struct wabpm_dev {
 	double k0, n02;
 	cplxd dp, dm;
 	int   polx, poly;
+	// 対称境界 : ix=0 / iy=0 の手前 (半セル外) に鏡像面。E[-1] = sgn*E[0]
+	int    hasSx, hasSy;
+	double sgnx, sgny;
 };
 
 struct wabpm_gpu {
@@ -48,6 +51,7 @@ struct wabpm_gpu {
 	cplxd *d_n2;    // 複素比誘電率 (スライス)
 	cplxd *d_cw;    // Thomas 法の上対角バッファ (Nx*Ny)
 	float *d_mult;  // 端部吸収体
+	float *d_beta;  // TPA 係数 (スライス) [m/W]
 	size_t N;
 };
 
@@ -81,8 +85,9 @@ static void k_explicit_y(struct wabpm_dev D, const cplxd *E, cplxd *T, const cpl
 		double a, b, c;
 		dstencil(D.poly, n2, i, D.Nx, iy, D.Ny, &a, &b, &c);
 		cplxd lap = b * E[i];
-		if (iy > 0)        lap += a * E[i - D.Nx];
-		if (iy < D.Ny - 1) lap += c * E[i + D.Nx];
+		if (iy > 0)          lap += a * E[i - D.Nx];
+		else if (D.hasSy)    lap += (a * D.sgny) * E[i];   // 鏡像セル
+		if (iy < D.Ny - 1)   lap += c * E[i + D.Nx];
 		const cplxd V2 = 0.5 * D.k0 * D.k0 * (n2[i] - D.n02);
 		T[i] = E[i] + D.dm * (lap * D.idy2 + V2 * E[i]);
 	}
@@ -98,8 +103,9 @@ static void k_explicit_x(struct wabpm_dev D, cplxd *E, const cplxd *T, const cpl
 		double a, b, c;
 		dstencil(D.polx, n2, i, 1, ix, D.Nx, &a, &b, &c);
 		cplxd lap = b * T[i];
-		if (ix > 0)        lap += a * T[i - 1];
-		if (ix < D.Nx - 1) lap += c * T[i + 1];
+		if (ix > 0)          lap += a * T[i - 1];
+		else if (D.hasSx)    lap += (a * D.sgnx) * T[i];   // 鏡像セル
+		if (ix < D.Nx - 1)   lap += c * T[i + 1];
 		const cplxd V2 = 0.5 * D.k0 * D.k0 * (n2[i] - D.n02);
 		E[i] = T[i] + D.dm * (lap * D.idx2 + V2 * T[i]);
 	}
@@ -124,6 +130,9 @@ static void k_implicit_x(struct wabpm_dev D, cplxd *E, const cplxd *n2, cplxd *c
 				// w / e の前要素は対角で正規化済み (c', r')
 				diag  -= sub * w[ix - 1];
 				e[ix] -= sub * e[ix - 1];
+			}
+			else if (D.hasSx) {
+				diag += sub * D.sgnx;   // E[-1] = sgn*E[0] を対角へ畳み込む
 			}
 			w[ix] = sup / diag;
 			e[ix] /= diag;
@@ -152,6 +161,9 @@ static void k_implicit_y(struct wabpm_dev D, cplxd *E, const cplxd *n2, cplxd *c
 				diag -= sub * w[iy - 1];
 				E[i] -= sub * E[i - D.Nx];
 			}
+			else if (D.hasSy) {
+				diag += sub * D.sgny;   // E[-1] = sgn*E[0] を対角へ畳み込む
+			}
 			w[iy] = sup / diag;
 			E[i] /= diag;
 		}
@@ -171,6 +183,46 @@ static void k_multiplier(struct wabpm_dev D, cplxd *E, const float *mult)
 	}
 }
 
+// 二光子吸収 (TPA) : E *= exp(-(beta/2)*I*dz), I = |E|^2 [W/m^2]
+// (物理スケーリング済みの界を仮定。強度の減衰率 alpha = beta*I に対し界には alpha/2)
+__global__
+static void k_tpa(struct wabpm_dev D, cplxd *E, const float *beta, double dz)
+{
+	const long N = (long)D.Nx * D.Ny;
+	for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < N; i += gridDim.x * (long)blockDim.x) {
+		const double b = beta[i];
+		if (b > 0) {
+			E[i] *= exp(-0.5 * b * thrust::norm(E[i]) * dz);
+		}
+	}
+}
+
+
+// z 断面の統計量 (GUI 表示用の /trace) : 近軸版 fieldTrace と同一の集計
+__global__
+static void k_trace(struct wabpm_dev D, const cplxd *E, const double *xc, const double *yc, double *acc)
+{
+	const long N = (long)D.Nx * D.Ny;
+	double s = 0, sx = 0, sy = 0, sxx = 0, syy = 0, pk = 0;
+	for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < N; i += gridDim.x * (long)blockDim.x) {
+		const long ix = i % D.Nx;
+		const long iy = i / D.Nx;
+		const double iv = thrust::norm(E[i]);
+		s   += iv;
+		sx  += xc[ix] * iv;
+		sy  += yc[iy] * iv;
+		sxx += xc[ix] * xc[ix] * iv;
+		syy += yc[iy] * yc[iy] * iv;
+		if (iv > pk) pk = iv;
+	}
+	atomicAdd(&acc[0], s);
+	atomicAdd(&acc[1], sx);
+	atomicAdd(&acc[2], sy);
+	atomicAdd(&acc[3], sxx);
+	atomicAdd(&acc[4], syy);
+	atomicMax((unsigned long long *)&acc[5], (unsigned long long)__double_as_longlong(pk));
+}
+
 struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
                                    const wabpm_cplx *E_host, const float *mult_host)
 {
@@ -184,6 +236,10 @@ struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
 	G->D.n02 = W->n0 * W->n0;
 	G->D.polx = (W->pol == 1);
 	G->D.poly = (W->pol == 2);
+	G->D.hasSx = (W->symx != 0);
+	G->D.hasSy = (W->symy != 0);
+	G->D.sgnx = (W->symx == 2) ? -1.0 : 1.0;
+	G->D.sgny = (W->symy == 2) ? -1.0 : 1.0;
 	if (W->wideangle) {
 		G->D.dp = cplxd(1.0,  W->k0 * W->n0 * W->dz) / (4 * W->k0 * W->k0 * W->n0 * W->n0);
 		G->D.dm = cplxd(1.0, -W->k0 * W->n0 * W->dz) / (4 * W->k0 * W->k0 * W->n0 * W->n0);
@@ -199,10 +255,35 @@ struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
 	WABPM_CHECK(cudaMalloc(&G->d_n2,   G->N * sizeof(cplxd)));
 	WABPM_CHECK(cudaMalloc(&G->d_cw,   G->N * sizeof(cplxd)));
 	WABPM_CHECK(cudaMalloc(&G->d_mult, G->N * sizeof(float)));
+	WABPM_CHECK(cudaMalloc(&G->d_beta, G->N * sizeof(float)));
 	WABPM_CHECK(cudaMemcpy(G->d_E,    E_host,    G->N * sizeof(cplxd), cudaMemcpyHostToDevice));
 	WABPM_CHECK(cudaMemcpy(G->d_mult, mult_host, G->N * sizeof(float), cudaMemcpyHostToDevice));
 
 	return G;
+}
+
+// z 断面の統計量を集計してホストへ返す (acc_host は 6 要素)
+// xc_dev / yc_dev は呼び出し側が確保・転送したデバイス側の座標配列
+void wabpm_gpu_trace(struct wabpm_gpu *G, const double *xc_dev, const double *yc_dev,
+                     double *acc_dev, double *acc_host)
+{
+	WABPM_CHECK(cudaMemset(acc_dev, 0, 6 * sizeof(double)));
+	const int tpb = 256;
+	const int nbe = (int)((G->N + tpb - 1) / tpb);
+	k_trace <<<nbe, tpb>>>(G->D, G->d_E, xc_dev, yc_dev, acc_dev);
+	WABPM_CHECK(cudaGetLastError());
+	WABPM_CHECK(cudaMemcpy(acc_host, acc_dev, 6 * sizeof(double), cudaMemcpyDeviceToHost));
+}
+
+// TPA を 1 ステップ分適用する (beta_host : このスライスの TPA 係数 [m/W], Nx*Ny)
+void wabpm_gpu_tpa(struct wabpm_gpu *G, const float *beta_host, double dz)
+{
+	WABPM_CHECK(cudaMemcpy(G->d_beta, beta_host, G->N * sizeof(float), cudaMemcpyHostToDevice));
+	const int tpb = 256;
+	const int nbe = (int)((G->N + tpb - 1) / tpb);
+	k_tpa <<<nbe, tpb>>>(G->D, G->d_E, G->d_beta, dz);
+	WABPM_CHECK(cudaGetLastError());
+	WABPM_CHECK(cudaDeviceSynchronize());
 }
 
 void wabpm_gpu_step(struct wabpm_gpu *G, const wabpm_cplx *n2_host)
@@ -242,5 +323,6 @@ void wabpm_gpu_destroy(struct wabpm_gpu *G)
 	cudaFree(G->d_n2);
 	cudaFree(G->d_cw);
 	cudaFree(G->d_mult);
+	cudaFree(G->d_beta);
 	free(G);
 }

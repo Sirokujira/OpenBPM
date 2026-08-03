@@ -112,6 +112,9 @@ __global__ void substep2b(struct parameters *);
 __global__ void applyMultiplier(struct parameters *, long, struct debug*);
 __global__ void swapEPointers(struct parameters *, long);
 __global__ void updatePrecisePower(struct parameters *);
+__global__ void applyTPA(struct parameters *, const float *, double, double *);
+__global__ void scalePrecisePowerByTPA(struct parameters *, const double *);
+__global__ void fieldTrace(struct parameters *, const double *, const double *, double *);
 
 #else
 

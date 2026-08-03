@@ -73,6 +73,20 @@ static double *read3d(hid_t file, const char *path, hsize_t dims[3])
 	return buf;
 }
 
+/* スカラーのメタデータを読む (無ければ def を返す) */
+static double readScalar(hid_t file, const char *path, double def)
+{
+	if (H5Lexists(file, path, H5P_DEFAULT) <= 0) return def;
+	hid_t dset = H5Dopen(file, path, H5P_DEFAULT);
+	if (dset < 0) return def;
+	double v = def;
+	if (H5Dread(dset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &v) < 0) {
+		v = def;
+	}
+	H5Dclose(dset);
+	return v;
+}
+
 /* dB スケールの等高線ページを1枚描く (data は行 = 縦軸, 列 = 横軸) */
 static void contourPage(const double *data, int rows, int cols,
 	const char *title, const char *xlabel, const char *ylabel,
@@ -210,11 +224,14 @@ int plot2dBpm(void)
 
 	/* ── 伝搬スナップショット frames (nframes x Ny x Nx) ──
 	   入力に frames = <interval> を指定した場合のみ存在する。
-	   全フレームを描くとページ数が過大になるため等間隔に間引く。 */
+	   全フレームを描くとページ数が過大になるため等間隔に間引き、
+	   各ページのタイトルには (取得できれば) z 位置を入れる。 */
 	hsize_t fd[3];
 	double *frames = read3d(file, "/field/frames", fd);
 	if (frames != NULL) {
 		const int nf = (int)fd[0], ny = (int)fd[1], nx = (int)fd[2];
+		const double interval = readScalar(file, "/metadata/frame_interval", 0);
+		const double dz = readScalar(file, "/metadata/grid_dz", 0);
 		const int npage = (nf < BPM_FRAME_PAGES) ? nf : BPM_FRAME_PAGES;
 		const double x0 = (nx == Nx) ? Xn[0] : 0;
 		const double x1 = (nx == Nx) ? Xn[Nx] : nx;
@@ -224,7 +241,13 @@ int plot2dBpm(void)
 			/* 先頭と末尾を必ず含む等間隔サンプリング */
 			const int idx = (npage > 1) ? (int)((double)p * (nf - 1) / (npage - 1)) : 0;
 			char title[BUFSIZ];
-			sprintf(title, "BPM snapshot |E(x,y)|^2 [dB] (frame %d/%d)", idx + 1, nf);
+			if ((interval > 0) && (dz > 0)) {
+				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  z = %.6e [m] (frame %d/%d)",
+				        Zn[0] + (idx * interval * dz), idx + 1, nf);
+			}
+			else {
+				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB] (frame %d/%d)", idx + 1, nf);
+			}
 			contourPage(&frames[(size_t)idx * ny * nx], ny, nx, title,
 			            "x[m]", "y[m]", x0, x1, y0, y1);
 			pages++;

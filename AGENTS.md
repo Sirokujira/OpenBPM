@@ -5,7 +5,9 @@ Claude Code 向けの CLAUDE.md と内容を同期させている (人手で編�
 
 OpenFDTD のコード構造を土台にしたビーム伝搬法 (BPM) 光導波路ソルバー (C/C++)。
 伝搬カーネルは BPM-MATLAB の FDBPM (Douglas-Gunn ADI) 移植 + 独自拡張
-(広角 Pade(1,1) / 半ベクトル / モードソルバ / TPA 非線形 / 波長掃引)。
+(広角 Pade(1,1) / 半ベクトル / モードソルバ / TPA 非線形 / 波長掃引 /
+テーパ・ツイスト / 対称境界)。
+ドキュメント・コメント・コミットメッセージは**日本語**で書く。
 
 ## ビルド・テスト (まずこれが通ることを確認)
 
@@ -55,10 +57,16 @@ LP モード、GI 自己集束ピッチ、チルト変位) は `.claude/rules/ph
 | `cuda/solve_bpm.cu` | 同 CUDA 版。**sol 側と鏡写しに保つこと** |
 | `bpm/FDBPMpropagator.c/.cu` | スカラー近軸カーネル (BPM-MATLAB 移植) |
 | `bpm/wabpm.cpp/.cu` | 広角/半ベクトルの一般化 ADI (倍精度) |
-| `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` から使用 |
+| `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` と `modes = <n>` から使用 |
 | `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
 | `post/postbpm.c` | obpm_post の BPM (/field) 可視化 |
 | `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN/モードビート/波長掃引) |
+| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証 (`check_activation.sh`) |
+| `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |
+
+出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/Iyz`,
+`/field/frames`, `/trace/*`, `/modes/*`, `/metadata/*`) + `obpm.out` (FDTD 形式、
+obpm_post の入力) + `activation_curve.csv` / `spectrum.csv` (掃引指定時)。
 
 ## 移植性の絶対規則 (Windows CI で実際に踏んだもの)
 
@@ -72,6 +80,9 @@ LP モード、GI 自己集束ピッチ、チルト変位) は `.claude/rules/ph
 - **main が並行して進む**: 作業開始時と push 前に `git fetch origin main` で分岐確認。
 - **obpm_post は obpm.out を必須入力にする**: BPM の既定出力から消さない。
 - **`I` マクロ**: `bpm_prototype.h` が虚数単位 `I` を定義。変数名に使わない。
+- **励振キーワードは 2 系統**: `launch = mode <m> [coef...]` (重ね合わせ可) と
+  `modes = <n> [excite]` (解析 + 基本モード励振)。併用時は **launch を優先**し
+  `excite` は警告を出して無視する。
 - **Dt/Tw は setup() が自動計算**: 「ユーザー指定か」の判定に `Dt != 0` は不可。
 - **メッシュ配列**: `Xn/Yn/Zn` は節点 (N+1)、`Xc/Yc/Zc` はセル中心。
   セル幅は `(Xn[Nx]-Xn[0])/Nx` (括弧の位置に注意)。
@@ -86,3 +97,12 @@ LP モード、GI 自己集束ピッチ、チルト変位) は `.claude/rules/ph
 - 既存ファイルのインデント流儀に合わせる (sol/ · cuda/ はタブ、bpm/ は 4 空白)。
 - コメントは日本語で可 (既存に合わせる)。
 - コミットメッセージは日本語、末尾に検証内容 (何をどう確認したか) を書く。
+
+## 作業の進め方
+
+- 実装漏れ対応は `docs/implementation-checklist.md` を起点にし、対応後は
+  同ファイルの状態 (✅/現状/検証内容) を更新する。
+- GPU 実機はこの開発環境にないため、CUDA 変更は「CUDA 12.0 でのコンパイル検証」まで。
+  その旨をコミット/チェックリストに明記する。
+- 規約の詳細は `.claude/rules/` にある (physics-validation / keyword-wiring /
+  bpm-physics / cuda / testing / portability)。本ファイルは同内容の要約である。

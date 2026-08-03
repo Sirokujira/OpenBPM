@@ -1,0 +1,60 @@
+# OpenBPM sample : symmetry boundary (対称境界による計算領域の削減)
+#
+# data/sample/fiber.ofd と同じ光ファイバを、x = 0 の鏡像面を使って
+# **半分の計算領域** (x = 0..15um, 45x90 セル) で解く。
+#   symmetry = x  : x = xmesh の始点を鏡像面とする (既定は対称 sym)
+#
+# 鏡像面はセル中心の半セル手前 (= xmesh の始点) に置かれる。
+# セル中心が ±dx/2, ±3dx/2, ... に並ぶため、半領域の格子は全領域の右半分と
+# 厳密に一致する。
+#
+# 期待される動作 (BPM のロジック確認ポイント):
+#   1. 出力電界が全領域計算 (fiber.ofd) の右半分と一致する
+#      (近軸は float32 の丸めで 3.5e-6、拡張パスは倍精度で厳密に一致)
+#   2. 出力パワーは全領域の 1/2 になる (1.561259e+02 / 3.122518e+02)
+#   3. /field 出力は半領域 (Ny x Nx/2) になる
+#
+# 注意 (この機能を使う際の前提):
+#   - メッシュには**半領域のみ**を与えること。出力も半領域になる。
+#   - **離散化後の**構造が鏡像面について対称である必要がある。
+#     OpenFDTD 由来の形状ラスタライズは y 方向に半セルの非対称性を生じるため
+#     (円形コアでも上下反転と 6.4e-3 の差)、y 対称面を使う場合は
+#     /field/n_out_r が実際に対称かを確認すること。x 方向は対称になる。
+#   - 対称境界は計算量の削減であり、物理は変わらない。
+OpenBPM 2 2
+title = fiber with x symmetry boundary (BPM sample)
+
+# 半領域 : x は 0..15um (45 セル)、y は全域 (90 セル)。dx は fiber.ofd と同じ 1/3um
+xmesh = 0 45 15e-6
+ymesh = -15e-6 90 15e-6
+zmesh = 0 200 200e-6
+
+# material = <type> <epsr> <esgm> <amur> <msgm>  (id starts at 2)
+# クラッド (n = 1.4440)
+material = 1 2.085136 0 1 0
+# コア (n = 1.4504)
+material = 1 2.103660 0 1 0
+
+# geometry = <material id> <shape> <x1> <x2> <y1> <y2> <z1> <z2>
+# 形状は全領域の座標のまま記述してよい (メッシュ外は無視される)
+geometry = 2 1 -15e-6 15e-6 -15e-6 15e-6 0 200e-6
+geometry = 3 13 -4.1e-6 4.1e-6 -4.1e-6 4.1e-6 0 200e-6
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0>
+feed = Z 0 0 0 1 0 0
+
+# beam = <w0[m]> : 中心は鏡像面 (x = 0)
+beam = 4.7e-6
+
+# refindex = <n0>
+refindex = 1.444
+
+# symmetry = <x|y|xy> [sym|anti] : x = xmesh 始点を鏡像面とする
+symmetry = x
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

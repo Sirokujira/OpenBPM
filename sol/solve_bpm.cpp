@@ -17,6 +17,68 @@
 #include <complex>
 
 
+
+// z 断面の統計量 (GUI 表示用の /trace) を計算する。
+// getI(ix, iy) は |E|^2 を返す呼び出し可能オブジェクト。
+//   power  : 断面の総パワー (面積要素 dA を掛ける。物理スケーリング時は [W])
+//   peak   : |E|^2 の最大値
+//   cx, cy : 強度重心 [m]
+//   wx, wy : 強度の 2 次モーメント幅 2*sigma [m]
+// 各モードへのパワー占有率 eta_m = |<phi_m, E>|^2 / (||phi_m||^2 * ||E||^2) を求める。
+// getE(i) は格子点 i の複素電界を返す呼び出し可能オブジェクト。
+// 結果は out[m*stride] に格納する (m = モード番号)。
+template <typename F>
+static void computeOverlap(int nModes, long N, const std::complex<double> *modes,
+                           F getE, double *out, long stride)
+{
+    double pe = 0;
+    for (long i = 0; i < N; i++) pe += std::norm(getE(i));
+    for (int m = 0; m < nModes; m++) {
+        const std::complex<double> *phi = &modes[(size_t)m * N];
+        std::complex<double> ip = 0;
+        double pm = 0;
+        for (long i = 0; i < N; i++) {
+            ip += std::conj(phi[i]) * getE(i);
+            pm += std::norm(phi[i]);
+        }
+        out[(size_t)m * stride] = ((pe > 0) && (pm > 0)) ? (std::norm(ip) / (pm * pe)) : 0.0;
+    }
+}
+
+template <typename F>
+static void computeTrace(int Nx, int Ny, const double *xc, const double *yc,
+                         double dA, F getI,
+                         double *power, double *peak,
+                         double *cx, double *cy, double *wx, double *wy)
+{
+    double s = 0, sx = 0, sy = 0, sxx = 0, syy = 0, pk = 0;
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double iv = getI(ix, iy);   // I は虚数単位マクロのため別名にする
+            s   += iv;
+            sx  += xc[ix] * iv;
+            sy  += yc[iy] * iv;
+            sxx += xc[ix] * xc[ix] * iv;
+            syy += yc[iy] * yc[iy] * iv;
+            if (iv > pk) pk = iv;
+        }
+    }
+    *power = s * dA;
+    *peak  = pk;
+    if (s > 0) {
+        const double mx = sx / s, my = sy / s;
+        const double vx = (sxx / s) - (mx * mx);
+        const double vy = (syy / s) - (my * my);
+        *cx = mx;
+        *cy = my;
+        *wx = 2 * sqrt(vx > 0 ? vx : 0);
+        *wy = 2 * sqrt(vy > 0 ? vy : 0);
+    }
+    else {
+        *cx = *cy = *wx = *wy = 0;
+    }
+}
+
 void solve_bpm(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
     // 関数から?(fp の入替え?)
@@ -146,8 +208,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     //    AntiSymmetry (2)
     //  end
     //end
-    P->xSymmetry = 0;
-    P->ySymmetry = 0;
+    // 対称境界 (symmetry = <x|y|xy> [sym|anti]) :
+    // 鏡像面は指定軸のメッシュ始端。カーネルの命名は「対称面の軸」基準のため、
+    // x 方向の鏡像 (x = xmin) は ySymmetry、y 方向の鏡像 (y = ymin) は xSymmetry。
+    P->ySymmetry = (unsigned char)BPM.symx;   // x = xmin の鏡像面
+    P->xSymmetry = (unsigned char)BPM.symy;   // y = ymin の鏡像面
 
     // 参照屈折率 : 入力 (refindex =) を優先し、
     // 未指定なら計算領域中心 (z=先頭スライス) の材料から取得する
@@ -169,8 +234,27 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     P->Ny_n = Ny;
     P->Nz_n = 1;
     P->dz_n = P->dz;
-    P->taperPerStep = 0.0;
-    P->twistPerStep = 0.0;
+    // テーパ (taper = 出口/入口の横方向スケール比) とツイスト (twist = [deg/m]) :
+    // 屈折率分布を座標変換 (相似縮小 + 回転) で z に沿って変化させる。
+    //   カーネル規約 : スケール係数 = 1 - taperPerStep*iz、回転角 = twistPerStep*iz [rad]
+    // 変換時の屈折率分布は**入力断面 (iz_start) の 2D 分布**を参照する
+    // (geometry 自体の z 変化とは併用しない)。
+    const long nzstep = P->iz_end - P->iz_start;
+    if (BPM.taper <= 0) {
+        sprintf(str, "*** warning : taper must be > 0 (given %g), ignored.", BPM.taper);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+        BPM.taper = 1;
+    }
+    P->taperPerStep = (nzstep > 0) ? (float)((1.0 - BPM.taper) / nzstep) : 0.0f;
+    P->twistPerStep = (float)(BPM.twist * DTOR * P->dz);
+    const int xform = (P->taperPerStep != 0.0f) || (P->twistPerStep != 0.0f);
+    if (xform) {
+        sprintf(str, "taper : ratio = %.4f (per step %.6e), twist : %.4f [deg/m] (total %.2f [deg])",
+                BPM.taper, P->taperPerStep, BPM.twist, BPM.twist * (Zn[Nz] - Zn[0]));
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
     // 曲げ : 入力 (bend = RoC [dir] [rho_e]) があれば等価屈折率法で反映する
     if (BPM.RoC > 0) {
         P->rho_e = (float)BPM.rho_e;
@@ -211,14 +295,43 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
     float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
 
+    // 伝搬の可視化用 (追加) : 中心列 (x = Nx/2) の強度 |E(y, z)|^2 と、
+    // z ごとのスカラー推移 (GUI でのグラフ表示用, /trace へ出力)
+    const long ntr = P->iz_end - P->iz_start;
+    float  *Iyz = (float *)malloc((size_t)P->Ny * ntr * sizeof(float));
+    double *trZ      = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trPower  = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trPeak   = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trCx     = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trCy     = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trWx     = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trWy     = (double *)malloc((size_t)ntr * sizeof(double));
+    // モード結合率 (modes 指定時のみ) : eta_m(z) = |<phi_m, E>|^2 / (||phi_m||^2 ||E||^2)
+    // 直交規格化済みモードに対する各モードのパワー占有率 (Σ_m eta_m <= 1)
+    // 格納は行優先 [m*ntr + t] (HDF5 では nModesFound x ntr の 2 次元配列)。
+    // 収束モード数は波長で変わりうるので、確保は上限 (BPM.nmodes) で行う。
+    double *trOverlap = (BPM.nmodes > 0)
+        ? (double *)malloc((size_t)BPM.nmodes * ntr * sizeof(double)) : NULL;
+
+    // モード解析 (modes = <n>) の結果。波長掃引では最終波長の結果が HDF5 に出る
+    // ため、ループの外で保持して各波長の先頭で作り直す。
+    int nModesFound = 0;
+    std::complex<double> *modeFields = NULL;
+    double *modeNeff = NULL;
+
     // |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
     const int  frameInterval = BPM.frames;
     const long nframes = (frameInterval > 0)
         ? ((P->iz_end - P->iz_start - 1) / frameInterval + 1) : 0;
     float *Frames = (nframes > 0)
         ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
+    // 複素電界のスナップショット (frames = <interval> complex 指定時のみ。位相表示用)
+    const int framesCplx = (nframes > 0) && BPM.framesComplex;
+    float *FramesR = framesCplx ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
+    float *FramesI = framesCplx ? (float *)malloc((size_t)nframes * P->Nx * P->Ny * sizeof(float)) : NULL;
     if (nframes > 0) {
-        sprintf(str, "frames : interval = %d steps, count = %ld", frameInterval, nframes);
+        sprintf(str, "frames : interval = %d steps, count = %ld%s", frameInterval, nframes,
+                BPM.framesComplex ? " (complex field also recorded)" : "");
         if (io) fprintf(fp, "%s\n", str);
         fprintf(stdout, "%s\n", str);
     }
@@ -298,14 +411,15 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             yc0 = Yn[Feed[0].j];
         }
         else {
-            xc0 = 0.5 * (Xn[0] + Xn[Nx]);
-            yc0 = 0.5 * (Yn[0] + Yn[Ny]);
+            // 対称境界がある軸は鏡像面 (メッシュ始端) を既定の中心にする
+            xc0 = BPM.symx ? Xn[0] : 0.5 * (Xn[0] + Xn[Nx]);
+            yc0 = BPM.symy ? Yn[0] : 0.5 * (Yn[0] + Yn[Ny]);
         }
         const double volt = (NFeed > 0) ? Feed[0].volt : 1;
-        const double xEdge = 0.45 * Lx;           // 吸収体開始位置 (領域中心からの距離)
-        const double yEdge = 0.45 * Ly;
-        const double xmid = 0.5 * (Xn[0] + Xn[Nx]);
-        const double ymid = 0.5 * (Yn[0] + Yn[Ny]);
+        const double xEdge = BPM.symx ? (0.90 * Lx) : (0.45 * Lx);           // 吸収体開始位置 (領域中心からの距離)
+        const double yEdge = BPM.symy ? (0.90 * Ly) : (0.45 * Ly);
+        const double xmid = BPM.symx ? Xn[0] : 0.5 * (Xn[0] + Xn[Nx]);
+        const double ymid = BPM.symy ? Yn[0] : 0.5 * (Yn[0] + Yn[Ny]);
         const double alpha = 3.0e14;              // 吸収係数 [1/m^3] (BPM-MATLAB 既定値)
         // 入射ビームの傾き (beamtilt =) : 横方向波数の位相ランプ
         const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
@@ -439,6 +553,102 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     }
 
     // ============================================================
+    // モード解析 (modes = <nModes> [excite])
+    //   入力断面 (iz_start) の屈折率分布から虚軸伝搬法 (bpm/modes.cpp) で
+    //   導波モードを求め、neff をログへ、モード形状を HDF5 (/modes) へ出力する。
+    //   excite 指定時は入射ビームを基本モードで置き換える (モード整合励振)。
+    //   曲げ (bend) は反映しない (直線導波路の入力断面のモード)。
+    //   半ベクトルの deflation は近似のためスカラー演算子で解析する。
+    //   launch = mode と併用した場合、励振は launch (重ね合わせ可) を優先し
+    //   excite は無視する (解析と /modes・/trace/overlap 出力は行う)。
+    // ============================================================
+    if (BPM.nmodes > 0) {
+        const long NN2 = (long)P->Nx * P->Ny;
+        // 波長掃引の 2 回目以降 : 前の波長の結果を破棄してから解き直す
+        if (modeFields) { delete[] modeFields; modeFields = NULL; }
+        if (modeNeff)   { delete[] modeNeff;   modeNeff = NULL; }
+        nModesFound = 0;
+        wabpm_params Wm;
+        Wm.Nx = Nx;
+        Wm.Ny = Ny;
+        Wm.dx = P->dx;
+        Wm.dy = P->dy;
+        Wm.k0 = k0;
+        Wm.n0 = P->n_0;
+        Wm.wideangle = 0;
+        Wm.pol = 0;
+        Wm.symx = BPM.symx;
+        Wm.symy = BPM.symy;
+
+        // 入力断面の比誘電率 (実部のみ : モードは無損失断面で定義する)
+        std::complex<double> *n2m = new std::complex<double>[NN2];
+        double nmax = P->n_0;
+        for (int iy = 0; iy < P->Ny; iy++) {
+            for (int ix = 0; ix < P->Nx; ix++) {
+                const floatcomplex nm = n_mat[iEx[NA(ix, iy, P->iz_start)]];
+                const double nr = CREALF(nm);
+                n2m[ix + (long)iy * P->Nx] = std::complex<double>(nr * nr, 0.0);
+                if (nr > nmax) nmax = nr;
+            }
+        }
+        // 虚軸ステップ幅 : 最大固有値 mu_max に対し a*mu_max ~ 0.5 となるよう選ぶ
+        const double mu_max = k0 * k0 * (nmax * nmax - P->n_0 * P->n_0);
+        Wm.dz = (mu_max > 0) ? (2.0 * k0 * P->n_0 / mu_max) : (10.0 * P->dx);
+
+        modeFields = new std::complex<double>[(size_t)BPM.nmodes * NN2];
+        modeNeff = new double[BPM.nmodes];
+        nModesFound = wabpm_find_modes(&Wm, n2m, BPM.nmodes, 20000, 1e-12,
+                                       modeFields, modeNeff);
+        delete[] n2m;
+
+        sprintf(str, "modes : %d / %d converged (imaginary-distance BPM, scalar)",
+                nModesFound, BPM.nmodes);
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+        for (int m = 0; m < nModesFound; m++) {
+            sprintf(str, "mode %d : neff = %.6f", m + 1, modeNeff[m]);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+
+        // モード整合励振 : 入射ビームを基本モードで置き換える。
+        // 振幅はガウシアン励振と同じ規約 (ピーク振幅 = 給電電圧)、
+        // beamtilt の位相ランプは維持する。
+        if (BPM.modeExcite && (BPM.launchMode >= 0)) {
+            sprintf(str, "*** warning : modes = ... excite is ignored because launch = mode is specified.");
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+        if (BPM.modeExcite && (BPM.launchMode < 0) && (nModesFound > 0)) {
+            const double volt = (NFeed > 0) ? Feed[0].volt : 1;
+            const double ktx = k0 * P->n_0 * sin(BPM.tiltx * DTOR);
+            const double kty = k0 * P->n_0 * sin(BPM.tilty * DTOR);
+            double mmax = 0;
+            for (long i = 0; i < NN2; i++) {
+                mmax = MAX(mmax, std::abs(modeFields[i]));
+            }
+            const double scale = (mmax > 0) ? (volt / mmax) : 1;
+            double power = 0;
+            for (int iy = 0; iy < P->Ny; iy++) {
+                for (int ix = 0; ix < P->Nx; ix++) {
+                    const long i = ix + (long)iy * P->Nx;
+                    const std::complex<double> a = scale * modeFields[i];
+                    const double ph = -(ktx * (Xc[ix] - xc0)) - (kty * (Yc[iy] - yc0));
+                    const std::complex<double> e =
+                        a * std::complex<double>(cos(ph), sin(ph));
+                    floatcomplex ef = {(float)e.real(), (float)e.imag()};
+                    P->E1[i] = ef;
+                    power += std::norm(e);
+                }
+            }
+            P->precisePower = power;
+            sprintf(str, "modes : mode-matched excitation with mode 1 (peak amp = %g)", volt);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+    }
+
+    // ============================================================
     // 非線形吸収 (TPA) / 入力パワー掃引 (ONN 光活性化関数) の準備
     //   - 物理スケーリング : 初期界を ∫∫|E|^2 dA = P_in [W] になるよう正規化し、
     //     |E|^2 がそのまま強度 I [W/m^2] になるようにする (面積要素 dA = Dx*Dy)。
@@ -565,6 +775,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         W.n0 = P->n_0;
         W.wideangle = BPM.wideangle;
         W.pol = BPM.pol;
+        W.symx = BPM.symx;
+        W.symy = BPM.symy;
 
         std::complex<double> *Ed = new std::complex<double>[(size_t)Nx * Ny];
         std::complex<double> *n2 = new std::complex<double>[(size_t)Nx * Ny];
@@ -587,12 +799,44 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             const double t0 = cputime();
 
             // このスライスの複素比誘電率 (n_mat は損失を +imag で保持 -> 物理符号 n = nr - i*ni に戻す)
+            // テーパ/ツイスト指定時は入力断面を座標変換 (相似縮小 + 回転) して参照する
+            // (近軸カーネル bpm/FDBPMpropagator.c と同一の変換式)
+            const long izr = iz - P->iz_start;
+            const double xfScale = 1.0 / (1.0 - (double)P->taperPerStep * izr);
+            const double xfCos = cos(-(double)P->twistPerStep * izr);
+            const double xfSin = sin(-(double)P->twistPerStep * izr);
             for (int iy = 0; iy < P->Ny; iy++) {
                 for (int ix = 0; ix < P->Nx; ix++) {
                     long index = (long)(P->Nx * iy) + ix;
-                    int64_t nn = NA(ix, iy, iz);
-                    const floatcomplex nm = n_mat[iEx[nn]];
-                    double nr = CREALF(nm);
+                    double nr, nimag;
+                    if (xform) {
+                        // 出力格子点に対応する入力断面上の位置を双一次補間で取得
+                        const double x = P->dx * (ix - (P->Nx - 1) / 2.0);
+                        const double y = P->dy * (iy - (P->Ny - 1) / 2.0);
+                        const double xs = xfScale * ((xfCos * x) - (xfSin * y));
+                        const double ys = xfScale * ((xfSin * x) + (xfCos * y));
+                        double fx = (xs / P->dx) + ((P->Nx - 1) / 2.0);
+                        double fy = (ys / P->dy) + ((P->Ny - 1) / 2.0);
+                        fx = MIN(MAX(0.0, fx), (P->Nx - 1) * (1.0 - 1e-7));
+                        fy = MIN(MAX(0.0, fy), (P->Ny - 1) * (1.0 - 1e-7));
+                        const int i0 = (int)floor(fx);
+                        const int j0 = (int)floor(fy);
+                        const double tx = fx - i0;
+                        const double ty = fy - j0;
+                        const floatcomplex n00 = n_mat[iEx[NA(i0,     j0,     P->iz_start)]];
+                        const floatcomplex n10 = n_mat[iEx[NA(i0 + 1, j0,     P->iz_start)]];
+                        const floatcomplex n01 = n_mat[iEx[NA(i0,     j0 + 1, P->iz_start)]];
+                        const floatcomplex n11 = n_mat[iEx[NA(i0 + 1, j0 + 1, P->iz_start)]];
+                        nr    = ((1 - tx) * (1 - ty) * CREALF(n00)) + (tx * (1 - ty) * CREALF(n10))
+                              + ((1 - tx) * ty * CREALF(n01))       + (tx * ty * CREALF(n11));
+                        nimag = ((1 - tx) * (1 - ty) * CIMAGF(n00)) + (tx * (1 - ty) * CIMAGF(n10))
+                              + ((1 - tx) * ty * CIMAGF(n01))       + (tx * ty * CIMAGF(n11));
+                    }
+                    else {
+                        const floatcomplex nm = n_mat[iEx[NA(ix, iy, iz)]];
+                        nr    = CREALF(nm);
+                        nimag = CIMAGF(nm);
+                    }
                     if (bend) {
                         const double x = P->dx * (ix - (P->Nx - 1) / 2.0);
                         const double y = P->dy * (iy - (P->Ny - 1) / 2.0);
@@ -600,7 +844,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                         nr = nr * (1.0 - nr * nr * xb * BPM.rho_e / (2.0 * BPM.RoC))
                                 * exp(xb / BPM.RoC);
                     }
-                    std::complex<double> n(nr, -CIMAGF(nm));
+                    std::complex<double> n(nr, -nimag);
                     n2[index] = n * n;
                 }
             }
@@ -627,19 +871,39 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 }
             }
 
-            // 中心行の強度を記録
+            // 中心行 / 中心列の強度と z ごとのスカラー推移を記録
             {
+                const long t = iz - P->iz_start;
                 const long row0 = (long)(P->Ny / 2) * P->Nx;
                 for (long ix = 0; ix < P->Nx; ix++) {
-                    Ixz[(iz - P->iz_start) * P->Nx + ix] = (float)std::norm(Ed[row0 + ix]);
+                    Ixz[t * P->Nx + ix] = (float)std::norm(Ed[row0 + ix]);
+                }
+                const long col0 = P->Nx / 2;
+                for (long iy = 0; iy < P->Ny; iy++) {
+                    Iyz[t * P->Ny + iy] = (float)std::norm(Ed[col0 + iy * P->Nx]);
+                }
+                trZ[t] = Zn[0] + ((iz + 1) * Dz);
+                computeTrace(P->Nx, P->Ny, Xc, Yc, Dx * Dy,
+                             [&](int ix, int iy) { return std::norm(Ed[ix + (long)iy * P->Nx]); },
+                             &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
+                if (trOverlap) {
+                    computeOverlap(nModesFound, (long)P->Nx * P->Ny, modeFields,
+                                   [&](long i) { return Ed[i]; }, &trOverlap[t], ntr);
                 }
             }
 
             // スナップショットを記録
             if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
-                float *f = &Frames[(size_t)((iz - P->iz_start) / frameInterval) * P->Nx * P->Ny];
+                const size_t off = (size_t)((iz - P->iz_start) / frameInterval) * P->Nx * P->Ny;
+                float *f = &Frames[off];
                 for (long i = 0; i < (long)Nx * Ny; i++) {
                     f[i] = (float)std::norm(Ed[i]);
+                }
+                if (framesCplx) {
+                    for (long i = 0; i < (long)Nx * Ny; i++) {
+                        FramesR[off + i] = (float)Ed[i].real();
+                        FramesI[off + i] = (float)Ed[i].imag();
+                    }
                 }
             }
 
@@ -672,12 +936,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         const double t0 = cputime();
 
         // このスライスの複素屈折率分布を材料 ID から設定 (虚部 = 導電率による吸収)
+        // テーパ/ツイスト指定時は入力断面を渡し、z 変化はカーネル側の座標変換に任せる
+        const int64_t iz_n = xform ? P->iz_start : iz;
         for (int iy = 0; iy < P->Ny; iy++)
         {
             for (int ix = 0; ix < P->Nx; ix++)
             {
                 long index = (long)(P->Nx * iy) + ix;
-                int64_t nn = NA(ix, iy, iz);
+                int64_t nn = NA(ix, iy, iz_n);
                 P->n_in[index] = n_mat[iEx[nn]];
             }
         }
@@ -722,22 +988,47 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             if (pb > 0) P->precisePower *= pa / pb;
         }
 
-        // 中心行の強度を記録 (このステップの結果は E2 にある)
+        // 中心行 / 中心列の強度と z ごとのスカラー推移を記録 (結果は E2 にある)
         {
+            const long t = iz - P->iz_start;
             const long row0 = (long)(P->Ny / 2) * P->Nx;
             for (long ix = 0; ix < P->Nx; ix++) {
                 const floatcomplex e = P->E2[row0 + ix];
-                Ixz[(iz - P->iz_start) * P->Nx + ix] =
-                    (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
+                Ixz[t * P->Nx + ix] = (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
+            }
+            const long col0 = P->Nx / 2;
+            for (long iy = 0; iy < P->Ny; iy++) {
+                const floatcomplex e = P->E2[col0 + iy * P->Nx];
+                Iyz[t * P->Ny + iy] = (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
+            }
+            trZ[t] = Zn[0] + ((iz + 1) * Dz);
+            computeTrace(P->Nx, P->Ny, Xc, Yc, Dx * Dy,
+                         [&](int ix, int iy) {
+                             const floatcomplex e = P->E2[ix + (long)iy * P->Nx];
+                             return ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+                         },
+                         &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
+            if (trOverlap) {
+                computeOverlap(nModesFound, (long)P->Nx * P->Ny, modeFields,
+                               [&](long i) {
+                                   const floatcomplex e = P->E2[i];
+                                   return std::complex<double>(CREALF(e), CIMAGF(e));
+                               },
+                               &trOverlap[t], ntr);
             }
         }
 
         // スナップショットを記録
         if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
-            float *f = &Frames[(size_t)((iz - P->iz_start) / frameInterval) * P->Nx * P->Ny];
+            const size_t off = (size_t)((iz - P->iz_start) / frameInterval) * P->Nx * P->Ny;
+            float *f = &Frames[off];
             for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
                 const floatcomplex e = P->E2[i];
                 f[i] = (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
+                if (framesCplx) {
+                    FramesR[off + i] = CREALF(e);
+                    FramesI[off + i] = CIMAGF(e);
+                }
             }
         }
 
@@ -835,6 +1126,17 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         }
     }
 
+
+    // モード結合率の要約 : 出口断面 (z = z_end) での各モードのパワー占有率をログへ。
+    // GUI/CI から「基本モードにどれだけ残ったか」を HDF5 を開かずに確認できる。
+    if (trOverlap && (ntr > 0)) {
+        for (int m = 0; m < nModesFound; m++) {
+            sprintf(str, "modes : overlap eta_%d = %.6f (z = z_end)",
+                    m + 1, trOverlap[((size_t)m * ntr) + (ntr - 1)]);
+            if (io) fprintf(fp, "%s\n", str);
+            fprintf(stdout, "%s\n", str);
+        }
+    }
     // result
     if (io) {
         sprintf(str, "    --- propagated %ld steps, output power = %.6e ---",
@@ -886,6 +1188,16 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             H5Sclose(dataspace_id);
         }
 
+        // 伝搬マップ |E(x=Nx/2, y, z)|^2 の書き込み (Ixz の y 版)
+        {
+            hsize_t iyz_dims[2] = {(hsize_t)ntr, (hsize_t)P->Ny};
+            dataspace_id = H5Screate_simple(2, iyz_dims, NULL);
+            dataset_id = H5Dcreate(field_group_id, "Iyz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Iyz);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+
         // スナップショット |E(x,y)|^2 (nframes x Ny x Nx) の書き込み
         if (Frames) {
             hsize_t fr_dims[3] = {(hsize_t)nframes, (hsize_t)P->Ny, (hsize_t)P->Nx};
@@ -894,8 +1206,89 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Frames);
             H5Dclose(dataset_id);
             H5Sclose(dataspace_id);
+            // 複素電界 (位相表示用)
+            if (framesCplx) {
+                const char *cn[2] = {"frames_r", "frames_i"};
+                float *cd[2] = {FramesR, FramesI};
+                for (int c = 0; c < 2; c++) {
+                    dataspace_id = H5Screate_simple(3, fr_dims, NULL);
+                    dataset_id = H5Dcreate(field_group_id, cn[c], H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                    status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, cd[c]);
+                    H5Dclose(dataset_id);
+                    H5Sclose(dataspace_id);
+                }
+            }
         }
         H5Gclose(field_group_id);
+    }
+
+    // z ごとのスカラー推移 (/trace) の書き込み : GUI での伝搬グラフ表示用
+    // すべて長さ ntr (= 伝搬ステップ数) の 1 次元配列で、trace[t] は
+    // z = trace/z[t] における値 (t 番目のステップ実行後の断面)
+    {
+        hid_t trace_group_id = H5Gcreate(file_id, "/trace", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        struct {
+            const char *name;
+            const double *data;
+        } trace_data[] = {
+            {"z",          trZ},       // 断面位置 [m]
+            {"power",      trPower},   // 断面の総パワー (物理スケーリング時は [W])
+            {"peak",       trPeak},    // |E|^2 の最大値
+            {"centroid_x", trCx},      // 強度重心 x [m]
+            {"centroid_y", trCy},      // 強度重心 y [m]
+            {"width_x",    trWx},      // 強度の 2 次モーメント幅 2*sigma x [m]
+            {"width_y",    trWy}       // 同 y [m]
+        };
+        hsize_t tr_dims[1] = {(hsize_t)ntr};
+        for (size_t n = 0; n < sizeof(trace_data) / sizeof(trace_data[0]); n++) {
+            dataspace_id = H5Screate_simple(1, tr_dims, NULL);
+            dataset_id = H5Dcreate(trace_group_id, trace_data[n].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trace_data[n].data);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        // モード結合率 (nModesFound x ntr) : overlap[m][t] は z = z[t] における
+        // モード m+1 のパワー占有率。/modes/neff と同じモード順序。
+        if (trOverlap) {
+            hsize_t ov_dims[2] = {(hsize_t)nModesFound, (hsize_t)ntr};
+            dataspace_id = H5Screate_simple(2, ov_dims, NULL);
+            dataset_id = H5Dcreate(trace_group_id, "overlap", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trOverlap);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        H5Gclose(trace_group_id);
+    }
+
+    // モード解析結果 (/modes) の書き込み : mode<i> (nModesFound x Ny x Nx) と neff
+    if (nModesFound > 0) {
+        hid_t modes_group_id = H5Gcreate(file_id, "/modes", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        const long NN2 = (long)P->Nx * P->Ny;
+        float *tmp = (float *)malloc((size_t)NN2 * sizeof(float));
+        char dsname[32];
+        for (int m = 0; m < nModesFound; m++) {
+            // モードは実数 (無損失断面) だが規約に合わせ実部を格納する
+            for (long i = 0; i < NN2; i++) {
+                tmp[i] = (float)modeFields[(size_t)m * NN2 + i].real();
+            }
+            hsize_t mdims[2] = {(hsize_t)P->Ny, (hsize_t)P->Nx};
+            sprintf(dsname, "mode%d", m + 1);
+            dataspace_id = H5Screate_simple(2, mdims, NULL);
+            dataset_id = H5Dcreate(modes_group_id, dsname, H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmp);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        free(tmp);
+        {
+            hsize_t ndims[1] = {(hsize_t)nModesFound};
+            dataspace_id = H5Screate_simple(1, ndims, NULL);
+            dataset_id = H5Dcreate(modes_group_id, "neff", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, modeNeff);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        H5Gclose(modes_group_id);
     }
 
     // メタデータの作成
@@ -1139,7 +1532,15 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     if (sweepPin != NULL) free(sweepPin);
     if (sweepPout != NULL) free(sweepPout);
     free(Ixz);
+    free(Iyz);
+    free(trZ); free(trPower); free(trPeak);
+    free(trCx); free(trCy); free(trWx); free(trWy);
+    if (trOverlap) free(trOverlap);
     if (Frames) free(Frames);
+    if (FramesR) free(FramesR);
+    if (FramesI) free(FramesI);
+    if (modeFields) delete[] modeFields;
+    if (modeNeff) delete[] modeNeff;
 
     return;
 }

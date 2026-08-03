@@ -241,6 +241,13 @@ EXTERN struct {
 	int    wideangle;         // 0 = paraxial, 1 = wide-angle Pade(1,1)
 	double tiltx, tilty;      // beam tilt angle [deg]
 	int    frames;            // |E(x,y)|^2 snapshot interval [z-steps] (0 = off)
+	int    framesComplex;     // 1 = also record complex field (frames_r/frames_i)
+	int    nmodes;            // number of modes to solve at input plane (0 = off)
+	int    modeExcite;        // 1 = excite with fundamental mode (mode-matched)
+	double taper;             // transverse scale ratio at output (1 = no taper)
+	double twist;             // twist rate [deg/m] (0 = no twist)
+	int    symx;              // mirror at x = xmin : 0 = none, 1 = symmetric, 2 = anti
+	int    symy;              // mirror at y = ymin : 0 = none, 1 = symmetric, 2 = anti
 	int    launchMode;        // launch: -1 = gaussian (default), >=0 = guided mode #m (先頭モード)
 	int    wlsweep;           // 1 = sweep all frequency2 points (0 = first only, default)
 	int    launchNModes;      // number of superposed modes (0 = gaussian)

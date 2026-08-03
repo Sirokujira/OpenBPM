@@ -22,6 +22,12 @@
       "Bash(grep:*)",
       "Bash(rg:*)",
       "Bash(ls:*)",
+      "Bash(./bin/obpm:*)",
+      "Bash(./bin/obpm_post:*)",
+      "Bash(bin/obpm:*)",
+      "Bash(bin/obpm_post:*)",
+      "Bash(python3 tools/plot_ixz.py:*)",
+      "Bash(sh tools/check_activation.sh:*)",
       "Bash(h5dump:*)"
     ],
     "deny": [

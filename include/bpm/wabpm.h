@@ -21,6 +21,10 @@ struct wabpm_params {
 	double n0;           // 参照屈折率
 	int    wideangle;    // 0 = 近軸, 1 = Pade(1,1)
 	int    pol;          // 0 = スカラー, 1 = x 偏波 (半ベクトル), 2 = y 偏波
+	// 対称境界 : インデックス 0 の手前 (半セル外) に鏡像面を置く
+	//   0 = なし (Dirichlet), 1 = 対称 (E[-1] = E[0]), 2 = 反対称 (E[-1] = -E[0])
+	int    symx;         // x 方向 (ix = 0 側)
+	int    symy;         // y 方向 (iy = 0 側)
 };
 
 // 1 ステップ伝搬 (E, n2 は Nx*Ny, 行優先 [iy*Nx+ix])
@@ -62,6 +66,12 @@ extern struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
                                           const wabpm_cplx *E_host, const float *mult_host);
 // 1 ステップ伝搬 (n2_host : このスライスの複素比誘電率) + 吸収体適用
 extern void wabpm_gpu_step(struct wabpm_gpu *G, const wabpm_cplx *n2_host);
+// z 断面の統計量を集計 (acc_host : 6 要素。sum|E|^2, sum x|E|^2, sum y|E|^2,
+//   sum x^2|E|^2, sum y^2|E|^2, peak。xc_dev/yc_dev/acc_dev は呼び出し側が確保)
+extern void wabpm_gpu_trace(struct wabpm_gpu *G, const double *xc_dev, const double *yc_dev,
+                            double *acc_dev, double *acc_host);
+// TPA を 1 ステップ分適用 (beta_host : このスライスの TPA 係数 [m/W], Nx*Ny)
+extern void wabpm_gpu_tpa(struct wabpm_gpu *G, const float *beta_host, double dz);
 // 行 iy の電界をホストへ取得 (Ixz 記録用)
 extern void wabpm_gpu_get_row(struct wabpm_gpu *G, int iy, wabpm_cplx *row_host);
 // 全電界をホストへ取得

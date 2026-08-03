@@ -1,14 +1,20 @@
 # OpenBPM 開発ガイド (Claude Code 用)
 
-OpenFDTD のコード構造を土台にしたビーム伝搬法 (BPM) 光導波路ソルバー (C/C++)。
-伝搬カーネルは BPM-MATLAB の FDBPM (Douglas-Gunn ADI) 移植 + 独自拡張
-(広角 Pade(1,1) / 半ベクトル / モードソルバ / TPA 非線形 / 波長掃引)。
+OpenFDTD のコード構造 (入力・メッシュ・材料・後処理) を土台にしたビーム伝搬法 (BPM)
+光導波路ソルバー (C/C++)。伝搬カーネルは BPM-MATLAB の FDBPM (Douglas-Gunn ADI)
+移植 + 独自拡張 (広角 Pade(1,1) / 半ベクトル / モードソルバ / TPA 非線形 /
+波長掃引 / テーパ・ツイスト / 対称境界)。
 OpenFDTD-X (GUI) から QProcess で起動される処理カーネルでもある。
+ドキュメント・コメント・コミットメッセージは**日本語**で書く。
+
+> 他エージェント (Codex 等) 向けに同内容を集約した `AGENTS.md` がある。
+> 本ファイルまたは `.claude/rules/*.md` の規約を変更したら `AGENTS.md` も更新すること。
 
 ## ビルド・テスト (まずこれが通ることを確認)
 
 ```sh
-# 依存: cmake, gcc/g++, libhdf5-dev, libeigen3-dev (+ OpenMP)
+# 依存: cmake >= 3.18, gcc/g++, libhdf5-dev, libeigen3-dev (+ OpenMP)
+# 実行ファイルは bin/ に出力 (obpm, obpm_post)
 cmake -S . -B build -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 cmake --build build -j
 ctest --test-dir build --output-on-failure   # 解析解との比較検証 (9本、要 h5py/numpy)
@@ -24,6 +30,10 @@ grep "normal end" obpm.log
 # ONN 活性化 (TPA + powersweep): activation_curve.csv が単調非増加で
 # 解析解 T = 1/(1 + β(P/A_eff)L) と ±7% (A_eff・L はログ出力を使う)
 cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activation.ofd
+sh $OLDPWD/tools/check_activation.sh activation_curve.csv obpm.log
+
+# 可視化 (PNG / GIF): 伝搬マップ・/trace グラフ・モード形状・結合率
+python3 tools/plot_ixz.py time_series_data.h5
 ```
 
 - CUDA 版: `-DWITH_CUDA=ON` → `obpm_cuda` (nvcc 必要。GPU 実機がない環境では
@@ -40,21 +50,31 @@ cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activ
 | `cuda/solve_bpm.cu` | 同 CUDA 版。**sol 側と鏡写しに保つこと** (下記ルール参照) |
 | `bpm/FDBPMpropagator.c/.cu` | スカラー近軸カーネル (BPM-MATLAB 移植、改変は上流照合必須) |
 | `bpm/wabpm.cpp/.cu` | 広角/半ベクトルの一般化 ADI (倍精度) |
-| `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` から使用 |
+| `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` と `modes = <n>` から使用 |
 | `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
+| `include/` | ヘッダ。グローバル状態は `obpm.h` (EXTERN パターン)、BPM API は `include/bpm/` |
 | `post/postbpm.c` | obpm_post の BPM (/field) 可視化 |
-| `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN 活性化 / モードビート / 波長掃引)。`tools/plot_ixz.py` は伝搬マップ描画 |
+| `mpi/`, `cuda_mpi/` | MPI 版 (FDTD のみ、BPM 未対応) |
+| `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN 活性化 / モードビート / 波長掃引) |
+| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証スクリプト (`check_activation.sh`) |
+| `data/` | OpenFDTD 形式 (.ofd) のサンプル入力。理論値との比較ポイントをコメントに記載 |
+| `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |
 
-出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/frames`,
-`/metadata/*`) + `obpm.out` (FDTD 形式。obpm_post の入力。`-no-fdtd-out` で省略可)
-+ `activation_curve.csv` (`powersweep` 指定時)
+出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/Iyz`,
+`/field/frames`, `/trace/*`, `/modes/*`, `/metadata/*`)
++ `obpm.out` (FDTD 形式。obpm_post の入力。`-no-fdtd-out` で省略可)
++ `activation_curve.csv` (`powersweep` 指定時) / `spectrum.csv` (`wlsweep` 指定時)
 
 ## 重要ルール (詳細は @.claude/rules/ を参照)
 
 - @.claude/rules/physics-validation.md
 - @.claude/rules/keyword-wiring.md
+- @.claude/rules/bpm-physics.md
+- @.claude/rules/cuda.md
+- @.claude/rules/testing.md
+- @.claude/rules/portability.md
 
-## 移植性の絶対規則 (Windows CI で実際に踏んだもの)
+## 移植性の絶対規則 (Windows/macOS CI で実際に踏んだもの)
 
 - **C99 VLA 禁止** (MSVC)。`malloc` + 明示インデックスで書く。
 - 複素数は `CREALF` / `CIMAGF` マクロ経由でアクセスする
@@ -62,17 +82,27 @@ cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activ
   `complex × double` の直接乗算を書かない (`complex × float` は可)。
 - libm は `MATH_LIB` 変数経由。MSVC フラグは既存 CMake ブロックに従う。
 - C は C99、C++ は C++17。ソースは UTF-8 (MSVC は /utf-8)。
+- 暗黙の関数宣言を残さない (macOS AppleClang はエラー扱い)。
 
-## 機能追加の規則
+## 重要な規約
 
-- 入力キーは `sol/input_data.c` に追加し、**省略時は従来動作とバイト一致**。
-- 物理スケーリング規約: `tpa`/`powersweep` 使用時のみ場を
+- **検証第一**: 数値カーネルの変更は必ず解析解 (回折・減衰・分散方程式など) と
+  比較して検証する。既存テストの許容誤差を緩めて通すのは禁止。
+- **後方互換**: 入力キーは `sol/input_data.c` に追加し、**省略時は従来動作と
+  バイト一致** (fiber 回帰を壊さない)。
+- **複素屈折率の符号**: `n_mat` は損失を +imag で保持。物理符号は `n = nr - i*ni`
+  (伝搬計算前に符号を反転する)。混同すると増幅になる。
+- **物理スケーリング規約**: `tpa`/`powersweep` 使用時のみ場を
   ∫∫|E|²dA = P_in [W] に正規化 (|E|² = 強度 I)。未使用時は従来の
-  無次元場のまま (fiber 回帰を壊さない)。
-- CPU の近軸/広角の**両経路**に同じ物理を入れる (片方だけの実装は不可)。
-- CUDA 版 (`obpm_cuda`) の対応状況を ReadMe.md に明記し、未対応キーワードは
-  **実行時 warning を出す** (サイレント無視は禁止)。
-- 新機能には data/ の検証ケース + CI スモークを付ける。
+  無次元場のまま。
+- **CPU 両経路 + CUDA パリティ**: 物理の追加は CPU の近軸/拡張の**両経路**に入れる
+  (片方だけは不可)。CUDA 版 (`obpm_cuda`) の対応状況を ReadMe.md に明記し、
+  未対応キーワードは**実行時 warning を出す** (サイレント無視は禁止)。
+- **入力キーワード追加**: `include/obpm.h` の BPM 構造体 → `sol/input_data.c` の
+  既定値と解析 → ReadMe.md のキーワード表、の 3 点セット。新機能には
+  `data/sample/` の検証ケースと CI スモーク (3 OS) を付ける。
+- **HDF5 出力**: `/field/*` (Ny×Nx 行優先) と `/metadata/*` (スカラー)。
+  新規データセット追加時は `tools/plot_ixz.py` と `post/postbpm.c` の対応も検討。
 
 ## Gotchas (このリポジトリ固有のハマりどころ)
 
@@ -84,6 +114,9 @@ cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activ
 - **`I` マクロ**: `bpm_prototype.h` が複素虚数単位 `I` を定義している。
   変数名に `I` を使わない。虚数単位をキャストで自作しない (過去に実数 1.0 に
   なる事故があった)。
+- **励振キーワードは 2 系統ある**: `launch = mode <m> [coef...]` (重ね合わせ可) と
+  `modes = <n> [excite]` (解析 + 基本モード励振)。併用時は **launch を優先**し
+  `excite` を無視する (警告を出す)。
 - **Dt/Tw は setup() が自動計算する**: 「ユーザーが指定したか」の判定に
   `Dt != 0` 等は使えない。
 - **CI は obpm.log の "normal end" と HDF5 の存在を検証する**: 終了メッセージや
@@ -105,6 +138,15 @@ cp data/sample/onn_activation.ofd /tmp/smoke/ && $OLDPWD/bin/obpm -n 2 onn_activ
 - 既存ファイルのインデント流儀に合わせる (sol/ · cuda/ はタブ、bpm/ は 4 空白)。
 - コメントは日本語で可 (既存に合わせる)。
 - コミットメッセージは日本語、末尾に検証内容 (何をどう確認したか) を書く。
+
+## 作業の進め方
+
+- 実装漏れ対応は `docs/implementation-checklist.md` を起点にし、対応後は
+  同ファイルの状態 (✅/現状/検証内容) を更新する。
+- GPU 実機はこの開発環境にないため、CUDA 変更は「CUDA 12.0 でのコンパイル検証」まで。
+  その旨をコミット/チェックリストに明記する。
+- コミットメッセージは日本語で「何を・なぜ」を要約し、検証結果 (テスト通過・
+  解析解との誤差) を本文に含める。
 
 ## CI
 

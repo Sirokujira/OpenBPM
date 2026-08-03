@@ -307,6 +307,7 @@ if (WITH_CUDA)
 
             #add_executable(obpm_cuda ${CUDA_SOURCES} src/cuda_Main.cu)
             #add_executable(obpm_cuda ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
+            # bpm/wabpm.cpp / bpm/modes.cpp はホスト側モード解析 (modes キーワード) 用
             add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu bpm/wabpm.cu bpm/wabpm.cpp bpm/modes.cpp src/cuda_Main.cu)
             #add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
 
