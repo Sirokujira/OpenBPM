@@ -343,3 +343,33 @@ main に新規変更なし、マーカー走査 0 件。E2E 検証 (ONN/回折/�
   （ファイルオープン失敗・HDF5 書き込み失敗等）であり、実装漏れではない。
 - `setNCladding()` / `setShapes()` / `setDisplayScaling()`（`bpm/model.cpp`）は
   旧 API を意図的に無効化する `throw` 実装であり、仕様どおり。
+
+---
+
+# 第 7 回: GUI 表示用の時系列 (z 伝搬) データ出力
+
+OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 に z 伝搬に沿った
+データを追加した (キーワード不要・常に出力)。
+
+- [x] **z 伝搬に沿った時系列データが不足** ✅ 対応済み
+  - 場所: `sol/solve_bpm.cpp` / `cuda/solve_bpm.cu` / `bpm/FDBPMpropagator.cu` /
+    `bpm/wabpm.cu` / `tools/plot_ixz.py`
+  - 追加内容:
+    - `/field/Iyz` (Nz x Ny) : 中心列の伝搬マップ (既存 `/field/Ixz` の y 版)
+    - `/trace/*` (長さ = 伝搬ステップ数の 1 次元配列) :
+      `z` (断面位置 [m])、`power` (断面総パワー)、`peak` (|E|^2 最大値)、
+      `centroid_x`/`centroid_y` (強度重心 [m])、`width_x`/`width_y` (2σ 幅 [m])
+    - 座標軸は既存の `/metadata/Xc,Yc,Zc`(セル中心) と `Xn,Yn,Zn`(節点) を利用可能
+    - `tools/plot_ixz.py` に `*_trace.png` (4 段グラフ) を追加
+  - 実装: CPU は `computeTrace` テンプレートで近軸/拡張の両パス共通。
+    CUDA は `fieldTrace` (近軸) と `k_trace` (拡張, `wabpm_gpu_trace`) の
+    デバイス集計カーネルで求め、ホストへは 6 要素のみ転送する
+    (毎ステップの全電界転送を避けるため)。集計値から統計量を出す式
+    (`traceFromAcc`) は CPU 版 `computeTrace` と同一。
+  - 検証: 自由空間ガウシアン回折 (`freespace.ofd`) で
+    `width_x` が解析解 `w(z) = w0*sqrt(1+(z/zR)^2)` と相対誤差 0.5% 以内で一致、
+    `power` はほぼ保存、`centroid` は約 0 (対称ビーム)、`peak` は回折で単調減少。
+    対称ビームで `Ixz` と `Iyz` が一致 (差 1.1e-6)。拡張パス (広角) でも同一の
+    データセットが出力されることを確認。既存回帰はすべて不変
+    (fiber 3.122518e+02、ctest 3 スイート、ONN、symmetry、taper/twist)。
+    CUDA 12.0 コンパイル検証済み (実機実行は GPU 待ち)。

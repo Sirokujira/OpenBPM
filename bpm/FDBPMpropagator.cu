@@ -306,6 +306,34 @@ void scalePrecisePowerByTPA(struct parameters *P, const double *sums) {
   if(sums[0] > 0) P->precisePower *= sums[1]/sums[0];
 }
 
+
+// z 断面の統計量 (GUI 表示用の /trace) をデバイス上で集計する
+// acc[0..4] = sum|E|^2, sum x|E|^2, sum y|E|^2, sum x^2|E|^2, sum y^2|E|^2
+// acc[5]    = |E|^2 の最大値 (非負 double は IEEE ビット列の大小と順序が一致するため
+//             unsigned long long の atomicMax で求められる)
+__global__
+void fieldTrace(struct parameters *P, const double *xc, const double *yc, double *acc) {
+  double s = 0, sx = 0, sy = 0, sxx = 0, syy = 0, pk = 0;
+  for(long i = blockIdx.x*(long)blockDim.x + threadIdx.x; i < P->Nx*P->Ny; i += gridDim.x*(long)blockDim.x) {
+    const long ix = i % P->Nx;
+    const long iy = i / P->Nx;
+    const floatcomplex e = P->E2[i];
+    const double iv = ((double)CREALF(e)*CREALF(e)) + ((double)CIMAGF(e)*CIMAGF(e));
+    s   += iv;
+    sx  += xc[ix]*iv;
+    sy  += yc[iy]*iv;
+    sxx += xc[ix]*xc[ix]*iv;
+    syy += yc[iy]*yc[iy]*iv;
+    if(iv > pk) pk = iv;
+  }
+  atomicAdd(&acc[0], s);
+  atomicAdd(&acc[1], sx);
+  atomicAdd(&acc[2], sy);
+  atomicAdd(&acc[3], sxx);
+  atomicAdd(&acc[4], syy);
+  atomicMax((unsigned long long *)&acc[5], (unsigned long long)__double_as_longlong(pk));
+}
+
 __global__
 void swapEPointers(struct parameters *P, long iz) {
   P->EfieldPower = 0;

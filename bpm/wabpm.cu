@@ -197,6 +197,32 @@ static void k_tpa(struct wabpm_dev D, cplxd *E, const float *beta, double dz)
 	}
 }
 
+
+// z 断面の統計量 (GUI 表示用の /trace) : 近軸版 fieldTrace と同一の集計
+__global__
+static void k_trace(struct wabpm_dev D, const cplxd *E, const double *xc, const double *yc, double *acc)
+{
+	const long N = (long)D.Nx * D.Ny;
+	double s = 0, sx = 0, sy = 0, sxx = 0, syy = 0, pk = 0;
+	for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < N; i += gridDim.x * (long)blockDim.x) {
+		const long ix = i % D.Nx;
+		const long iy = i / D.Nx;
+		const double iv = thrust::norm(E[i]);
+		s   += iv;
+		sx  += xc[ix] * iv;
+		sy  += yc[iy] * iv;
+		sxx += xc[ix] * xc[ix] * iv;
+		syy += yc[iy] * yc[iy] * iv;
+		if (iv > pk) pk = iv;
+	}
+	atomicAdd(&acc[0], s);
+	atomicAdd(&acc[1], sx);
+	atomicAdd(&acc[2], sy);
+	atomicAdd(&acc[3], sxx);
+	atomicAdd(&acc[4], syy);
+	atomicMax((unsigned long long *)&acc[5], (unsigned long long)__double_as_longlong(pk));
+}
+
 struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
                                    const wabpm_cplx *E_host, const float *mult_host)
 {
@@ -234,6 +260,19 @@ struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
 	WABPM_CHECK(cudaMemcpy(G->d_mult, mult_host, G->N * sizeof(float), cudaMemcpyHostToDevice));
 
 	return G;
+}
+
+// z 断面の統計量を集計してホストへ返す (acc_host は 6 要素)
+// xc_dev / yc_dev は呼び出し側が確保・転送したデバイス側の座標配列
+void wabpm_gpu_trace(struct wabpm_gpu *G, const double *xc_dev, const double *yc_dev,
+                     double *acc_dev, double *acc_host)
+{
+	WABPM_CHECK(cudaMemset(acc_dev, 0, 6 * sizeof(double)));
+	const int tpb = 256;
+	const int nbe = (int)((G->N + tpb - 1) / tpb);
+	k_trace <<<nbe, tpb>>>(G->D, G->d_E, xc_dev, yc_dev, acc_dev);
+	WABPM_CHECK(cudaGetLastError());
+	WABPM_CHECK(cudaMemcpy(acc_host, acc_dev, 6 * sizeof(double), cudaMemcpyDeviceToHost));
 }
 
 // TPA を 1 ステップ分適用する (beta_host : このスライスの TPA 係数 [m/W], Nx*Ny)

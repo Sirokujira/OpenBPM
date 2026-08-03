@@ -26,6 +26,31 @@ static void cuda_check(cudaError_t code, const char *file, int line)
 }
 #define CUDA_CHECK(ans) cuda_check((ans), __FILE__, __LINE__)
 
+
+// z 断面の統計量 (GUI 表示用の /trace) を集計値から算出する。
+// CPU 版 sol/solve_bpm.cpp の computeTrace と同一の式。
+// acc[0..5] = sum|E|^2, sum x|E|^2, sum y|E|^2, sum x^2|E|^2, sum y^2|E|^2, peak
+static void traceFromAcc(const double *acc, double dA,
+                         double *power, double *peak,
+                         double *cx, double *cy, double *wx, double *wy)
+{
+	const double s = acc[0];
+	*power = s * dA;
+	*peak  = acc[5];
+	if (s > 0) {
+		const double mx = acc[1] / s, my = acc[2] / s;
+		const double vx = (acc[3] / s) - (mx * mx);
+		const double vy = (acc[4] / s) - (my * my);
+		*cx = mx;
+		*cy = my;
+		*wx = 2 * sqrt(vx > 0 ? vx : 0);
+		*wy = 2 * sqrt(vy > 0 ? vy : 0);
+	}
+	else {
+		*cx = *cy = *wx = *wy = 0;
+	}
+}
+
 void solve_bpm(int io, double *tdft, FILE *fp)
 {
 	// HDF5ファイルの作成
@@ -451,6 +476,26 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
 	floatcomplex *Erow = (floatcomplex *)malloc(P->Nx * sizeof(floatcomplex));
 
+	// 伝搬の可視化用 (追加) : 中心列 (x = Nx/2) の強度と z ごとのスカラー推移
+	const long ntr = P->iz_end - P->iz_start;
+	float  *Iyz     = (float *)malloc((size_t)P->Ny * ntr * sizeof(float));
+	double *trZ     = (double *)malloc((size_t)ntr * sizeof(double));
+	double *trPower = (double *)malloc((size_t)ntr * sizeof(double));
+	double *trPeak  = (double *)malloc((size_t)ntr * sizeof(double));
+	double *trCx    = (double *)malloc((size_t)ntr * sizeof(double));
+	double *trCy    = (double *)malloc((size_t)ntr * sizeof(double));
+	double *trWx    = (double *)malloc((size_t)ntr * sizeof(double));
+	double *trWy    = (double *)malloc((size_t)ntr * sizeof(double));
+	floatcomplex *Ecol = (floatcomplex *)malloc(P->Ny * sizeof(floatcomplex));
+	// 統計量カーネル用 : セル中心座標と集計バッファをデバイスへ
+	double *d_xc = NULL, *d_yc = NULL, *d_acc = NULL;
+	double accHost[6];
+	CUDA_CHECK(cudaMalloc(&d_xc, (size_t)P->Nx * sizeof(double)));
+	CUDA_CHECK(cudaMalloc(&d_yc, (size_t)P->Ny * sizeof(double)));
+	CUDA_CHECK(cudaMalloc(&d_acc, 6 * sizeof(double)));
+	CUDA_CHECK(cudaMemcpy(d_xc, Xc, (size_t)P->Nx * sizeof(double), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(d_yc, Yc, (size_t)P->Ny * sizeof(double), cudaMemcpyHostToDevice));
+
 	// |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
 	const int  frameInterval = BPM.frames;
 	const long nframes = (frameInterval > 0)
@@ -597,10 +642,22 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				wabpm_gpu_tpa(G, betaSlice, Dz);
 			}
 
-			// 中心行の強度を記録
-			wabpm_gpu_get_row(G, P->Ny / 2, Ed);  // Ed の先頭 Nx 要素を一時利用
-			for (long ix = 0; ix < Nx; ix++) {
-				Ixz[(iz - P->iz_start) * Nx + ix] = (float)thrust::norm(Ed[ix]);
+			// 中心行 / 中心列の強度と z ごとのスカラー推移を記録
+			{
+				const long t = iz - P->iz_start;
+				wabpm_gpu_get_row(G, P->Ny / 2, Ed);  // Ed の先頭 Nx 要素を一時利用
+				for (long ix = 0; ix < Nx; ix++) {
+					Ixz[t * Nx + ix] = (float)thrust::norm(Ed[ix]);
+				}
+				wabpm_gpu_get_field(G, Ed);
+				const long col0 = Nx / 2;
+				for (long iy = 0; iy < Ny; iy++) {
+					Iyz[t * Ny + iy] = (float)thrust::norm(Ed[col0 + iy * Nx]);
+				}
+				trZ[t] = Zn[0] + ((iz + 1) * Dz);
+				wabpm_gpu_trace(G, d_xc, d_yc, d_acc, accHost);
+				traceFromAcc(accHost, Dx * Dy,
+				             &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
 			}
 
 			// スナップショットを記録 (全電界をホストへ取得)
@@ -696,12 +753,29 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		{
 			struct parameters P_now;
 			CUDA_CHECK(cudaMemcpy(&P_now, P_dev, sizeof(struct parameters), cudaMemcpyDeviceToHost));
+			const long t = iz - P->iz_start;
 			const long row0 = (long)(P->Ny / 2) * P->Nx;
 			CUDA_CHECK(cudaMemcpy(Erow, P_now.E2 + row0, P->Nx * sizeof(floatcomplex), cudaMemcpyDeviceToHost));
 			for (long ix = 0; ix < P->Nx; ix++) {
-				Ixz[(iz - P->iz_start) * P->Nx + ix] =
+				Ixz[t * P->Nx + ix] =
 					(CREALF(Erow[ix]) * CREALF(Erow[ix])) + (CIMAGF(Erow[ix]) * CIMAGF(Erow[ix]));
 			}
+			// 中心列 (x = Nx/2) : stride コピーのため 1 要素ずつ取得する
+			CUDA_CHECK(cudaMemcpy2D(Ecol, sizeof(floatcomplex),
+			                        P_now.E2 + (P->Nx / 2), P->Nx * sizeof(floatcomplex),
+			                        sizeof(floatcomplex), P->Ny, cudaMemcpyDeviceToHost));
+			for (long iy = 0; iy < P->Ny; iy++) {
+				Iyz[t * P->Ny + iy] =
+					(CREALF(Ecol[iy]) * CREALF(Ecol[iy])) + (CIMAGF(Ecol[iy]) * CIMAGF(Ecol[iy]));
+			}
+			// z ごとのスカラー推移 (デバイス側で集計)
+			trZ[t] = Zn[0] + ((iz + 1) * Dz);
+			CUDA_CHECK(cudaMemset(d_acc, 0, 6 * sizeof(double)));
+			fieldTrace<<<tpaNb, tpaTpb>>>(P_dev, d_xc, d_yc, d_acc);
+			CUDA_CHECK(cudaDeviceSynchronize());
+			CUDA_CHECK(cudaMemcpy(accHost, d_acc, 6 * sizeof(double), cudaMemcpyDeviceToHost));
+			traceFromAcc(accHost, Dx * Dy,
+			             &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
 
 			// スナップショットを記録 (デバイス側 E2 の全体をコピー)
 			if (Frames && ((iz - P->iz_start) % frameInterval == 0)) {
@@ -818,6 +892,16 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			H5Sclose(dataspace_id);
 		}
 
+		// 伝搬マップ |E(x=Nx/2, y, z)|^2 の書き込み (Ixz の y 版)
+		{
+			hsize_t iyz_dims[2] = {(hsize_t)ntr, (hsize_t)P->Ny};
+			dataspace_id = H5Screate_simple(2, iyz_dims, NULL);
+			dataset_id = H5Dcreate(field_group_id, "Iyz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Iyz);
+			H5Dclose(dataset_id);
+			H5Sclose(dataspace_id);
+		}
+
 		// スナップショット |E(x,y)|^2 (nframes x Ny x Nx) の書き込み
 		if (Frames) {
 			hsize_t fr_dims[3] = {(hsize_t)nframes, (hsize_t)P->Ny, (hsize_t)P->Nx};
@@ -828,6 +912,33 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			H5Sclose(dataspace_id);
 		}
 		H5Gclose(field_group_id);
+	}
+
+	// z ごとのスカラー推移 (/trace) の書き込み : GUI での伝搬グラフ表示用
+	// (CPU 版 sol/solve_bpm.cpp と同一の内容・単位)
+	{
+		hid_t trace_group_id = H5Gcreate(file_id, "/trace", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+		struct {
+			const char *name;
+			const double *data;
+		} trace_data[] = {
+			{"z",          trZ},
+			{"power",      trPower},
+			{"peak",       trPeak},
+			{"centroid_x", trCx},
+			{"centroid_y", trCy},
+			{"width_x",    trWx},
+			{"width_y",    trWy}
+		};
+		hsize_t tr_dims[1] = {(hsize_t)ntr};
+		for (size_t n = 0; n < sizeof(trace_data) / sizeof(trace_data[0]); n++) {
+			dataspace_id = H5Screate_simple(1, tr_dims, NULL);
+			dataset_id = H5Dcreate(trace_group_id, trace_data[n].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+			status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trace_data[n].data);
+			H5Dclose(dataset_id);
+			H5Sclose(dataspace_id);
+		}
+		H5Gclose(trace_group_id);
 	}
 
 	// モード解析結果 (/modes) の書き込み : mode<i> (Ny x Nx) と neff
@@ -1032,7 +1143,14 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	free(P->multiplier);
 	free(n_mat);
 	free(Ixz);
+	free(Iyz);
 	free(Erow);
+	free(Ecol);
+	free(trZ); free(trPower); free(trPeak);
+	free(trCx); free(trCy); free(trWx); free(trWy);
+	CUDA_CHECK(cudaFree(d_xc));
+	CUDA_CHECK(cudaFree(d_yc));
+	CUDA_CHECK(cudaFree(d_acc));
 	if (Frames) free(Frames);
 	free(tpa_mat);
 	if (betaSlice != NULL) free(betaSlice);

@@ -4,6 +4,7 @@
 生成物 (入力 HDF5 と同じディレクトリに出力):
   - <prefix>_ixz.png    : 伝搬マップ |E(x, y=Ny/2, z)|^2 (/field/Ixz)
   - <prefix>_final.png  : 最終電界 |E(x,y)|^2 と屈折率分布 (/field/Efinal_*, n_out_r)
+  - <prefix>_trace.png  : z ごとのスカラー推移 (/trace : パワー・ピーク強度・重心・幅)
   - <prefix>_modes.png  : 導波モード形状と neff (/modes がある場合のみ。
                           ソルバ入力で `modes = <nModes>` を指定して解析する)
   - <prefix>_prop.gif   : |E(x,y)|^2 の伝搬アニメーション (/field/frames がある場合のみ。
@@ -57,6 +58,11 @@ def main():
         dz = read_scalar(f, "/metadata/grid_dz")
         dy = read_scalar(f, "/metadata/grid_dy")
         frame_interval = read_scalar(f, "/metadata/frame_interval", 0)
+        trace = {}
+        if "/trace" in f:
+            for k in ("z", "power", "peak", "centroid_x", "centroid_y", "width_x", "width_y"):
+                if f"/trace/{k}" in f:
+                    trace[k] = f[f"/trace/{k}"][:]
         mode_fields = []
         mode_neff = []
         if "/modes" in f:
@@ -117,6 +123,33 @@ def main():
     fig.savefig(f"{prefix}_final.png", dpi=150)
     plt.close(fig)
     print(f"wrote {prefix}_final.png")
+
+    # --- z ごとのスカラー推移 (/trace) ---
+    if trace.get("z") is not None and len(trace["z"]) > 1:
+        zum = trace["z"] * 1e6
+        panels = [
+            # ラベルは英語 (matplotlib の既定フォントは日本語グリフを持たない)
+            ("power",      "cross-section power",  1.0,  None),
+            ("peak",       "peak |E|^2",           1.0,  None),
+            ("centroid_x", "centroid [um]",        1e6,  "centroid_y"),
+            ("width_x",    "beam width 2sigma [um]", 1e6, "width_y"),
+        ]
+        avail = [p for p in panels if p[0] in trace]
+        fig, axes = plt.subplots(len(avail), 1, figsize=(8, 2.6 * len(avail)), sharex=True)
+        axes = np.atleast_1d(axes)
+        for ax, (key, label, sc, pair) in zip(axes, avail):   # sc : scale() 関数を隠さない名前
+            ax.plot(zum, trace[key] * sc, label=key)
+            if pair and pair in trace:
+                ax.plot(zum, trace[pair] * sc, label=pair)
+                ax.legend(fontsize=8)
+            ax.set_ylabel(label)
+            ax.grid(alpha=0.3)
+        axes[-1].set_xlabel("z [um]")
+        axes[0].set_title("BPM propagation traces (/trace)")
+        fig.tight_layout()
+        fig.savefig(f"{prefix}_trace.png", dpi=150)
+        plt.close(fig)
+        print(f"wrote {prefix}_trace.png")
 
     # --- 導波モード形状 (/modes) ---
     if mode_fields:

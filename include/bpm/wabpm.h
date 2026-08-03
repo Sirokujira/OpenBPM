@@ -66,6 +66,10 @@ extern struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
                                           const wabpm_cplx *E_host, const float *mult_host);
 // 1 ステップ伝搬 (n2_host : このスライスの複素比誘電率) + 吸収体適用
 extern void wabpm_gpu_step(struct wabpm_gpu *G, const wabpm_cplx *n2_host);
+// z 断面の統計量を集計 (acc_host : 6 要素。sum|E|^2, sum x|E|^2, sum y|E|^2,
+//   sum x^2|E|^2, sum y^2|E|^2, peak。xc_dev/yc_dev/acc_dev は呼び出し側が確保)
+extern void wabpm_gpu_trace(struct wabpm_gpu *G, const double *xc_dev, const double *yc_dev,
+                            double *acc_dev, double *acc_host);
 // TPA を 1 ステップ分適用 (beta_host : このスライスの TPA 係数 [m/W], Nx*Ny)
 extern void wabpm_gpu_tpa(struct wabpm_gpu *G, const float *beta_host, double dz);
 // 行 iy の電界をホストへ取得 (Ixz 記録用)

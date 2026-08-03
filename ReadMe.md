@@ -55,6 +55,7 @@ python3 tools/plot_ixz.py time_series_data.h5 [--db] [--prefix out] [--fps 15]
 
 - `*_ixz.png` : 伝搬マップ `/field/Ixz` のヒートマップ
 - `*_final.png` : 最終電界 `|E(x,y)|^2` と屈折率分布
+- `*_trace.png` : z ごとのスカラー推移 (`/trace` : 断面パワー・ピーク強度・重心・ビーム幅)
 - `*_modes.png` : 導波モード形状と neff (入力に `modes = <nModes>` を指定して
   `/modes` を出力した場合のみ)
 - `*_prop.gif` : `|E(x,y)|^2` の伝搬アニメーション (入力に `frames = <interval>` を
@@ -126,7 +127,25 @@ ctest --test-dir build --output-on-failure
 - 結果は `time_series_data.h5` (HDF5) に出力されます
   (`/field/Efinal_r`, `/field/Efinal_i` : 最終電界、`/field/n_out_r` : 屈折率分布、
   `/field/Ixz` : 伝搬マップ |E(x, y=Ny/2, z)|^2 (Nz x Nx)、
+  `/field/Iyz` : 伝搬マップ |E(x=Nx/2, y, z)|^2 (Nz x Ny)、
   `/metadata/lambda`, `/metadata/n_0`, `/metadata/beam_w0` : BPM パラメータ)。
+
+#### 伝搬に沿った時系列データ (`/trace`) — GUI 表示用
+
+z ステップごとの断面統計量を 1 次元配列 (長さ = 伝搬ステップ数) で出力します。
+画面側でそのままグラフ表示できます (`tools/plot_ixz.py` の `*_trace.png` も参照)。
+
+| データセット | 内容 |
+|---|---|
+| `/trace/z` | 断面位置 z [m] (t 番目のステップ実行後) |
+| `/trace/power` | 断面の総パワー ∫∫\|E\|^2 dA (`tpa`/`powersweep` 使用時は [W]) |
+| `/trace/peak` | \|E\|^2 の最大値 |
+| `/trace/centroid_x`, `/trace/centroid_y` | 強度重心 [m] |
+| `/trace/width_x`, `/trace/width_y` | 強度の 2 次モーメント幅 2σ [m] |
+
+座標軸は `/metadata/Xc`, `Yc`, `Zc` (セル中心) と `Xn`, `Yn`, `Zn` (節点) を使用できます。
+`/trace` と `/field/Iyz` は常に出力され、CPU 版・CUDA 版で同一内容です
+(CUDA 版はデバイス上で集計するため転送コストは断面 1 行/列ぶんに収まります)。
 
 ### BPM 用キーワード (OpenFDTD 形式の拡張)
 

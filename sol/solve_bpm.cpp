@@ -17,6 +17,47 @@
 #include <complex>
 
 
+
+// z 断面の統計量 (GUI 表示用の /trace) を計算する。
+// getI(ix, iy) は |E|^2 を返す呼び出し可能オブジェクト。
+//   power  : 断面の総パワー (面積要素 dA を掛ける。物理スケーリング時は [W])
+//   peak   : |E|^2 の最大値
+//   cx, cy : 強度重心 [m]
+//   wx, wy : 強度の 2 次モーメント幅 2*sigma [m]
+template <typename F>
+static void computeTrace(int Nx, int Ny, const double *xc, const double *yc,
+                         double dA, F getI,
+                         double *power, double *peak,
+                         double *cx, double *cy, double *wx, double *wy)
+{
+    double s = 0, sx = 0, sy = 0, sxx = 0, syy = 0, pk = 0;
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double iv = getI(ix, iy);   // I は虚数単位マクロのため別名にする
+            s   += iv;
+            sx  += xc[ix] * iv;
+            sy  += yc[iy] * iv;
+            sxx += xc[ix] * xc[ix] * iv;
+            syy += yc[iy] * yc[iy] * iv;
+            if (iv > pk) pk = iv;
+        }
+    }
+    *power = s * dA;
+    *peak  = pk;
+    if (s > 0) {
+        const double mx = sx / s, my = sy / s;
+        const double vx = (sxx / s) - (mx * mx);
+        const double vy = (syy / s) - (my * my);
+        *cx = mx;
+        *cy = my;
+        *wx = 2 * sqrt(vx > 0 ? vx : 0);
+        *wy = 2 * sqrt(vy > 0 ? vy : 0);
+    }
+    else {
+        *cx = *cy = *wx = *wy = 0;
+    }
+}
+
 void solve_bpm(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
     // 関数から?(fp の入替え?)
@@ -426,6 +467,18 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 伝搬の可視化用 : 中心行 (y = Ny/2) の強度 |E(x, z)|^2 を全ステップ記録する
     float *Ixz = (float *)malloc((size_t)P->Nx * (P->iz_end - P->iz_start) * sizeof(float));
 
+    // 伝搬の可視化用 (追加) : 中心列 (x = Nx/2) の強度 |E(y, z)|^2 と、
+    // z ごとのスカラー推移 (GUI でのグラフ表示用, /trace へ出力)
+    const long ntr = P->iz_end - P->iz_start;
+    float  *Iyz = (float *)malloc((size_t)P->Ny * ntr * sizeof(float));
+    double *trZ      = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trPower  = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trPeak   = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trCx     = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trCy     = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trWx     = (double *)malloc((size_t)ntr * sizeof(double));
+    double *trWy     = (double *)malloc((size_t)ntr * sizeof(double));
+
     // |E(x,y)|^2 スナップショット (frames = interval 指定時のみ, /field/frames へ出力)
     const int  frameInterval = BPM.frames;
     const long nframes = (frameInterval > 0)
@@ -584,12 +637,21 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 }
             }
 
-            // 中心行の強度を記録
+            // 中心行 / 中心列の強度と z ごとのスカラー推移を記録
             {
+                const long t = iz - P->iz_start;
                 const long row0 = (long)(P->Ny / 2) * P->Nx;
                 for (long ix = 0; ix < P->Nx; ix++) {
-                    Ixz[(iz - P->iz_start) * P->Nx + ix] = (float)std::norm(Ed[row0 + ix]);
+                    Ixz[t * P->Nx + ix] = (float)std::norm(Ed[row0 + ix]);
                 }
+                const long col0 = P->Nx / 2;
+                for (long iy = 0; iy < P->Ny; iy++) {
+                    Iyz[t * P->Ny + iy] = (float)std::norm(Ed[col0 + iy * P->Nx]);
+                }
+                trZ[t] = Zn[0] + ((iz + 1) * Dz);
+                computeTrace(P->Nx, P->Ny, Xc, Yc, Dx * Dy,
+                             [&](int ix, int iy) { return std::norm(Ed[ix + (long)iy * P->Nx]); },
+                             &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
             }
 
             // スナップショットを記録
@@ -681,14 +743,26 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             if (pb > 0) P->precisePower *= pa / pb;
         }
 
-        // 中心行の強度を記録 (このステップの結果は E2 にある)
+        // 中心行 / 中心列の強度と z ごとのスカラー推移を記録 (結果は E2 にある)
         {
+            const long t = iz - P->iz_start;
             const long row0 = (long)(P->Ny / 2) * P->Nx;
             for (long ix = 0; ix < P->Nx; ix++) {
                 const floatcomplex e = P->E2[row0 + ix];
-                Ixz[(iz - P->iz_start) * P->Nx + ix] =
-                    (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
+                Ixz[t * P->Nx + ix] = (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
             }
+            const long col0 = P->Nx / 2;
+            for (long iy = 0; iy < P->Ny; iy++) {
+                const floatcomplex e = P->E2[col0 + iy * P->Nx];
+                Iyz[t * P->Ny + iy] = (CREALF(e) * CREALF(e)) + (CIMAGF(e) * CIMAGF(e));
+            }
+            trZ[t] = Zn[0] + ((iz + 1) * Dz);
+            computeTrace(P->Nx, P->Ny, Xc, Yc, Dx * Dy,
+                         [&](int ix, int iy) {
+                             const floatcomplex e = P->E2[ix + (long)iy * P->Nx];
+                             return ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+                         },
+                         &trPower[t], &trPeak[t], &trCx[t], &trCy[t], &trWx[t], &trWy[t]);
         }
 
         // スナップショットを記録
@@ -809,6 +883,16 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             H5Sclose(dataspace_id);
         }
 
+        // 伝搬マップ |E(x=Nx/2, y, z)|^2 の書き込み (Ixz の y 版)
+        {
+            hsize_t iyz_dims[2] = {(hsize_t)ntr, (hsize_t)P->Ny};
+            dataspace_id = H5Screate_simple(2, iyz_dims, NULL);
+            dataset_id = H5Dcreate(field_group_id, "Iyz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Iyz);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+
         // スナップショット |E(x,y)|^2 (nframes x Ny x Nx) の書き込み
         if (Frames) {
             hsize_t fr_dims[3] = {(hsize_t)nframes, (hsize_t)P->Ny, (hsize_t)P->Nx};
@@ -819,6 +903,34 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             H5Sclose(dataspace_id);
         }
         H5Gclose(field_group_id);
+    }
+
+    // z ごとのスカラー推移 (/trace) の書き込み : GUI での伝搬グラフ表示用
+    // すべて長さ ntr (= 伝搬ステップ数) の 1 次元配列で、trace[t] は
+    // z = trace/z[t] における値 (t 番目のステップ実行後の断面)
+    {
+        hid_t trace_group_id = H5Gcreate(file_id, "/trace", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        struct {
+            const char *name;
+            const double *data;
+        } trace_data[] = {
+            {"z",          trZ},       // 断面位置 [m]
+            {"power",      trPower},   // 断面の総パワー (物理スケーリング時は [W])
+            {"peak",       trPeak},    // |E|^2 の最大値
+            {"centroid_x", trCx},      // 強度重心 x [m]
+            {"centroid_y", trCy},      // 強度重心 y [m]
+            {"width_x",    trWx},      // 強度の 2 次モーメント幅 2*sigma x [m]
+            {"width_y",    trWy}       // 同 y [m]
+        };
+        hsize_t tr_dims[1] = {(hsize_t)ntr};
+        for (size_t n = 0; n < sizeof(trace_data) / sizeof(trace_data[0]); n++) {
+            dataspace_id = H5Screate_simple(1, tr_dims, NULL);
+            dataset_id = H5Dcreate(trace_group_id, trace_data[n].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trace_data[n].data);
+            H5Dclose(dataset_id);
+            H5Sclose(dataspace_id);
+        }
+        H5Gclose(trace_group_id);
     }
 
     // モード解析結果 (/modes) の書き込み : mode<i> (nModesFound x Ny x Nx) と neff
@@ -1089,6 +1201,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     if (sweepPin != NULL) free(sweepPin);
     if (sweepPout != NULL) free(sweepPout);
     free(Ixz);
+    free(Iyz);
+    free(trZ); free(trPower); free(trPeak);
+    free(trCx); free(trCy); free(trWx); free(trWy);
     if (Frames) free(Frames);
     if (modeFields) delete[] modeFields;
     if (modeNeff) delete[] modeNeff;
