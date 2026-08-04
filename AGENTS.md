@@ -74,6 +74,10 @@ obpm_post の入力) + `activation_curve.csv` / `spectrum.csv` (掃引指定時)
 - 複素数は `CREALF` / `CIMAGF` マクロ経由 (MSVC では C ソースが
   `std::complex<float>` としてビルドされる)。`complex × double` の直接乗算禁止。
 - libm は `MATH_LIB` 変数経由。C は C99、C++ は C++17。ソースは UTF-8。
+- **macOS の AppleClang は OpenMP を同梱しない**。`CMakeLists.txt` が
+  `brew --prefix libomp` から `OpenMP_C_FLAGS` 等を自動設定している
+  (`if(APPLE ...)` ブロック)。消すと macOS で configure が通らなくなる。
+  ビルド前に `brew install libomp hdf5 eigen` が必要。
 
 ## ハマりどころ
 

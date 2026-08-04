@@ -79,6 +79,38 @@ set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
 # Find CUDA package
 # use CUDA?
 # Find OpenMP package
+#
+# macOS の AppleClang は OpenMP ランタイムを同梱しないため、素の
+# find_package(OpenMP) は必ず失敗する (OpenMP_C_FLAGS / OpenMP_C_LIB_NAMES が
+# 見つからない)。Homebrew の libomp を自動検出して FindOpenMP に渡す。
+# ユーザーが -DOpenMP_C_FLAGS=... 等を明示指定した場合はそちらを尊重する。
+if(APPLE AND NOT DEFINED OpenMP_C_FLAGS)
+    find_program(BREW_EXECUTABLE brew)
+    if(BREW_EXECUTABLE)
+        execute_process(COMMAND ${BREW_EXECUTABLE} --prefix libomp
+                        OUTPUT_VARIABLE HOMEBREW_LIBOMP
+                        OUTPUT_STRIP_TRAILING_WHITESPACE
+                        ERROR_QUIET)
+    endif()
+    if(HOMEBREW_LIBOMP AND EXISTS "${HOMEBREW_LIBOMP}/lib/libomp.dylib")
+        message(STATUS "macOS: Homebrew の libomp を使用します (${HOMEBREW_LIBOMP})")
+        set(OpenMP_C_FLAGS "-Xclang -fopenmp -I${HOMEBREW_LIBOMP}/include"
+            CACHE STRING "OpenMP C flags (Homebrew libomp)")
+        set(OpenMP_C_LIB_NAMES "omp"
+            CACHE STRING "OpenMP C library names")
+        set(OpenMP_CXX_FLAGS "-Xclang -fopenmp -I${HOMEBREW_LIBOMP}/include"
+            CACHE STRING "OpenMP C++ flags (Homebrew libomp)")
+        set(OpenMP_CXX_LIB_NAMES "omp"
+            CACHE STRING "OpenMP C++ library names")
+        set(OpenMP_omp_LIBRARY "${HOMEBREW_LIBOMP}/lib/libomp.dylib"
+            CACHE FILEPATH "OpenMP runtime library (Homebrew libomp)")
+    else()
+        message(WARNING
+            "macOS で Homebrew の libomp が見つかりませんでした。\n"
+            "  brew install libomp hdf5 eigen\n"
+            "を実行してから再度 cmake を実行してください。")
+    endif()
+endif()
 find_package(OpenMP REQUIRED)
 # Find MPI package
 

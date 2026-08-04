@@ -37,11 +37,33 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 必要パッケージ: CMake (>=3.18), C/C++ コンパイラ, Eigen3, HDF5, OpenMP
 
 ```sh
+# Ubuntu / Debian
+sudo apt install cmake g++ libhdf5-dev libeigen3-dev
+
+# macOS (AppleClang は OpenMP を同梱しないため libomp が必須)
+brew install libomp hdf5 eigen
+```
+
+```sh
 cmake -S . -B build
 cmake --build build -j
 ```
 
 実行ファイルは `bin/` に出力されます (`obpm`, `obpm_post`)。
+
+> macOS では CMake が Homebrew の `libomp` を自動検出します
+> (`brew --prefix libomp`)。Homebrew を使っていない場合や別の場所に
+> インストールしている場合は、OpenMP のパスを明示指定してください:
+>
+> ```sh
+> OMP=/path/to/libomp
+> cmake -S . -B build \
+>   -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
+>   -DOpenMP_C_LIB_NAMES=omp \
+>   -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
+>   -DOpenMP_CXX_LIB_NAMES=omp \
+>   -DOpenMP_omp_LIBRARY="${OMP}/lib/libomp.dylib"
+> ```
 
 - CUDA 版: `-DWITH_CUDA=ON` (要 CUDA Toolkit)
   - `obpm_cuda` は CPU 版と同じ BPM 機能 (beam/refindex/導電率吸収/メッシュ警告/bend/

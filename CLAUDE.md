@@ -14,6 +14,7 @@ OpenFDTD-X (GUI) から QProcess で起動される処理カーネルでもあ�
 
 ```sh
 # 依存: cmake >= 3.18, gcc/g++, libhdf5-dev, libeigen3-dev (+ OpenMP)
+# macOS: brew install libomp hdf5 eigen (AppleClang は OpenMP を同梱しない)
 # 実行ファイルは bin/ に出力 (obpm, obpm_post)
 cmake -S . -B build -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 cmake --build build -j
