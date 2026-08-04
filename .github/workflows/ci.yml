@@ -206,6 +206,9 @@ jobs:
       #  兼ねるため、ここで -DOpenMP_* を明示指定しない)
       - name: Configure (CPU only)
         run: |
+          # 既定シェルは bash -e (pipefail なし) のため、tee へのパイプで
+          # cmake の失敗が握り潰されないよう明示的に有効化する
+          set -o pipefail
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON \
             -DPython3_EXECUTABLE="$(command -v python3)" 2>&1 | tee configure.log
           grep -q "Homebrew の libomp を使用します" configure.log
