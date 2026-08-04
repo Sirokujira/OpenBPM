@@ -181,7 +181,8 @@ jobs:
           if-no-files-found: ignore
 
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
-  # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
+  # CMakeLists が Homebrew の libomp を自動検出して find_package(OpenMP) を通す。
+  # このジョブはその自動検出の検証も兼ねる (-DOpenMP_* を渡さずに configure する)。
   build-macos:
     # macOS ランナーは課金レート x10 (private リポジトリ) で最も高価なため、
     # main への push・タグ・手動実行のみに限定する (PR では実行しない)。
