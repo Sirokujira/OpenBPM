@@ -138,8 +138,12 @@ int input_data(FILE *fp)
 		// input
 		if      (nline == 0) {
 			strcpy(prog, strkey);
-			if (strcmp(prog, "OpenBPM") && strcmp(prog, "OpenTHFD")) {
-				printf("%s\n", "*** not OpenBPM data");
+			// 1 行目のプログラム名。OpenFDTD-X (GUI) が書き出す .ofd は
+			// "OpenFDTD" ヘッダだが入力形式は同一なので受け付ける。
+			// 弾く場合は実際に読んだ名前を出す (GUI 連携時の切り分け用)。
+			if (strcmp(prog, "OpenBPM") && strcmp(prog, "OpenFDTD") && strcmp(prog, "OpenTHFD")) {
+				printf("*** not OpenBPM data : 1st line = \"%s\""
+				       " (expected OpenBPM / OpenFDTD / OpenTHFD)\n", prog);
 				return 1;
 			}
 			if (ntoken < 3) {

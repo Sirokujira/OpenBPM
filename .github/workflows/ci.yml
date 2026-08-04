@@ -60,6 +60,25 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
+      # 1 行目のプログラム名の受理範囲 (GUI 連携の回帰防止)
+      # OpenFDTD-X が書き出す .ofd は "OpenFDTD" ヘッダなので受け付ける必要がある。
+      # 未知の名前は実際に読んだ名前を添えて弾くこと。
+      - name: Smoke test — .ofd header (OpenBPM / OpenFDTD / unknown)
+        run: |
+          mkdir -p /tmp/smoke-hdr && cd /tmp/smoke-hdr
+          sed 's/^OpenBPM 2 2/OpenFDTD 2 2/' "$GITHUB_WORKSPACE/data/sample/fiber.ofd" > hdr_fdtd.ofd
+          sed 's/^OpenBPM 2 2/OpenMOM 2 2/'  "$GITHUB_WORKSPACE/data/sample/fiber.ofd" > hdr_bad.ofd
+          # OpenFDTD ヘッダ : 受理され OpenBPM ヘッダと同一の結果になること
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out hdr_fdtd.ofd
+          grep -q "normal end" obpm.log
+          grep -q "output power = 3.122518e+02" obpm.log
+          # 未知のヘッダ : 非ゼロ終了し、読んだ名前がメッセージに出ること
+          if "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out hdr_bad.ofd > bad.log 2>&1; then
+            echo "FAIL: unknown header was accepted"; cat bad.log; exit 1
+          fi
+          grep -q 'not OpenBPM data : 1st line = "OpenMOM"' bad.log
+          echo "header check OK"
+
       # data/ 直下の全サンプルを実行し HDF5 出力と正常終了を確認する
       # (obpm.out は不要なので -no-fdtd-out でスキップ)
       - name: Smoke test — all samples
@@ -162,7 +181,8 @@ jobs:
           if-no-files-found: ignore
 
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
-  # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
+  # CMakeLists が Homebrew の libomp を自動検出して find_package(OpenMP) を通す。
+  # このジョブはその自動検出の検証も兼ねる (-DOpenMP_* を渡さずに configure する)。
   build-macos:
     # macOS ランナーは課金レート x10 (private リポジトリ) で最も高価なため、
     # main への push・タグ・手動実行のみに限定する (PR では実行しない)。
@@ -181,16 +201,17 @@ jobs:
       # Python3_EXECUTABLE は pip install と同じ PATH の python3 に固定する
       # (FindPython3 が別のインタプリタを拾うと ctest で h5py が import 不能になる。
       #  Windows で実際に発生したのと同じ問題の予防)
+      # OpenMP のフラグは CMakeLists が Homebrew の libomp を自動検出して設定する
+      # (ReadMe が案内する素の `cmake -S . -B build` が macOS で通ることの検証を
+      #  兼ねるため、ここで -DOpenMP_* を明示指定しない)
       - name: Configure (CPU only)
         run: |
-          OMP="$(brew --prefix libomp)"
+          # 既定シェルは bash -e (pipefail なし) のため、tee へのパイプで
+          # cmake の失敗が握り潰されないよう明示的に有効化する
+          set -o pipefail
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON \
-            -DPython3_EXECUTABLE="$(command -v python3)" \
-            -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
-            -DOpenMP_C_LIB_NAMES=omp \
-            -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
-            -DOpenMP_CXX_LIB_NAMES=omp \
-            -DOpenMP_omp_LIBRARY="${OMP}/lib/libomp.dylib"
+            -DPython3_EXECUTABLE="$(command -v python3)" 2>&1 | tee configure.log
+          grep -q "Homebrew の libomp を使用します" configure.log
 
       - name: Build obpm / obpm_post
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
