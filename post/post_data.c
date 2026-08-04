@@ -124,8 +124,11 @@ int post_data(FILE *fp)
 		// input
 		if      (nline == 0) {
 			strcpy(prog, strkey);
-			if (strcmp(prog, "OpenBPM") && strcmp(prog, "OpenTHFD")) {
-				printf("%s\n", "*** not OpenBPM/OpenTHFD data");
+			// ソルバー側 (sol/input_data.c) と同じ判定にする
+			// (OpenFDTD-X が書き出す "OpenFDTD" ヘッダも受け付ける)
+			if (strcmp(prog, "OpenBPM") && strcmp(prog, "OpenFDTD") && strcmp(prog, "OpenTHFD")) {
+				printf("*** not OpenBPM data : 1st line = \"%s\""
+				       " (expected OpenBPM / OpenFDTD / OpenTHFD)\n", prog);
 				return 1;
 			}
 			if (ntoken < 3) {

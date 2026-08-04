@@ -60,6 +60,25 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
 
+      # 1 行目のプログラム名の受理範囲 (GUI 連携の回帰防止)
+      # OpenFDTD-X が書き出す .ofd は "OpenFDTD" ヘッダなので受け付ける必要がある。
+      # 未知の名前は実際に読んだ名前を添えて弾くこと。
+      - name: Smoke test — .ofd header (OpenBPM / OpenFDTD / unknown)
+        run: |
+          mkdir -p /tmp/smoke-hdr && cd /tmp/smoke-hdr
+          sed 's/^OpenBPM 2 2/OpenFDTD 2 2/' "$GITHUB_WORKSPACE/data/sample/fiber.ofd" > hdr_fdtd.ofd
+          sed 's/^OpenBPM 2 2/OpenMOM 2 2/'  "$GITHUB_WORKSPACE/data/sample/fiber.ofd" > hdr_bad.ofd
+          # OpenFDTD ヘッダ : 受理され OpenBPM ヘッダと同一の結果になること
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out hdr_fdtd.ofd
+          grep -q "normal end" obpm.log
+          grep -q "output power = 3.122518e+02" obpm.log
+          # 未知のヘッダ : 非ゼロ終了し、読んだ名前がメッセージに出ること
+          if "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out hdr_bad.ofd > bad.log 2>&1; then
+            echo "FAIL: unknown header was accepted"; cat bad.log; exit 1
+          fi
+          grep -q 'not OpenBPM data : 1st line = "OpenMOM"' bad.log
+          echo "header check OK"
+
       # data/ 直下の全サンプルを実行し HDF5 出力と正常終了を確認する
       # (obpm.out は不要なので -no-fdtd-out でスキップ)
       - name: Smoke test — all samples

@@ -145,7 +145,18 @@ ctest --test-dir build --output-on-failure
 
 ## 実行
 
-入力データは OpenFDTD 形式です。BPM を適用したサンプル (波長 1.55um):
+入力データは OpenFDTD 形式です。1 行目のプログラム名は
+`OpenBPM` / `OpenFDTD` / `OpenTHFD` のいずれでも受け付けます
+(OpenFDTD-X (GUI) が書き出す `.ofd` は `OpenFDTD` ヘッダです)。
+それ以外の名前だった場合は、実際に読んだ名前を添えて
+
+```
+*** not OpenBPM data : 1st line = "..." (expected OpenBPM / OpenFDTD / OpenTHFD)
+```
+
+と表示して終了します。
+
+BPM を適用したサンプル (波長 1.55um):
 
 | ファイル | 内容 |
 |---|---|
