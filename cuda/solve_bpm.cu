@@ -27,6 +27,47 @@ static void cuda_check(cudaError_t code, const char *file, int line)
 #define CUDA_CHECK(ans) cuda_check((ans), __FILE__, __LINE__)
 
 
+// ============================================================
+// HDF5 の自己記述用ヘルパ (GUI・汎用ビューア向け)
+//   BPM は定常解法で時間軸を持たない。行進 (marching) 軸は z であり、
+//   FDTD の時間軸に相当するのは z である。この対応を読み手が推測せずに
+//   済むよう、軸名・単位・座標データセットの所在を属性として書き出す。
+//   参考 : 上流の BPM-Matlab も P.z / P.xzSlice / P.modeOverlaps のように
+//          z を独立変数として保持する (時間軸には見せない)。
+// ============================================================
+static void h5AttrStr(hid_t obj, const char *name, const char *value)
+{
+	hid_t t = H5Tcopy(H5T_C_S1);
+	H5Tset_size(t, strlen(value) + 1);
+	H5Tset_strpad(t, H5T_STR_NULLTERM);
+	hid_t s = H5Screate(H5S_SCALAR);
+	hid_t a = H5Acreate(obj, name, t, s, H5P_DEFAULT, H5P_DEFAULT);
+	H5Awrite(a, t, value);
+	H5Aclose(a);
+	H5Sclose(s);
+	H5Tclose(t);
+}
+
+static void h5AttrLong(hid_t obj, const char *name, long value)
+{
+	hid_t s = H5Screate(H5S_SCALAR);
+	hid_t a = H5Acreate(obj, name, H5T_NATIVE_LONG, s, H5P_DEFAULT, H5P_DEFAULT);
+	H5Awrite(a, H5T_NATIVE_LONG, &value);
+	H5Aclose(a);
+	H5Sclose(s);
+}
+
+// データセットへ「何を・どの軸で・どの単位で」を付ける。
+//   dims        : 軸名をカンマ区切りで並べたもの (先頭が最も外側の軸)
+//   coordinates : 各軸の座標データセットのパス (空白区切り、dims と同順)
+static void h5Annotate(hid_t obj, const char *long_name, const char *units,
+					   const char *dims, const char *coordinates)
+{
+	h5AttrStr(obj, "long_name", long_name);
+	h5AttrStr(obj, "units", units);
+	if (dims)        h5AttrStr(obj, "dims", dims);
+	if (coordinates) h5AttrStr(obj, "coordinates", coordinates);
+}
 // z 断面の統計量 (GUI 表示用の /trace) を集計値から算出する。
 // CPU 版 sol/solve_bpm.cpp の computeTrace と同一の式。
 // acc[0..5] = sum|E|^2, sum x|E|^2, sum y|E|^2, sum x^2|E|^2, sum y^2|E|^2, peak
@@ -693,6 +734,19 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	// HDF5ファイルの作成
 	file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
+	// ルート属性 : このファイルが BPM (定常解法) の出力であり、系列の独立変数が
+	// 時間ではなく z であることを宣言する (CPU 版 sol/solve_bpm.cpp と同一)。
+	{
+		hid_t root_id = H5Gopen(file_id, "/", H5P_DEFAULT);
+		h5AttrStr(root_id, "solver", "OpenBPM (beam propagation method)");
+		h5AttrStr(root_id, "domain", "steady-state (single frequency, no time axis)");
+		h5AttrStr(root_id, "marching_axis", "z");
+		h5AttrStr(root_id, "marching_axis_values", "/trace/z");
+		h5AttrLong(root_id, "marching_steps", (long)ntr);
+		h5AttrLong(root_id, "time_dependent", 0);
+		H5Gclose(root_id);
+	}
+
 	// ============================================================
 	// 入力パワー掃引ループ (powersweep 未指定時は 1 回のみ実行)
 	// 各回 : 初期界を P_in [W] に正規化 -> z 伝搬 -> P_out を記録する。
@@ -1088,6 +1142,12 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			{"n_out_r",  P->n_out,  0},
 			{"n_out_i",  P->n_out,  1}
 		};
+		const char *field_label[] = {
+			"final electric field (real part)",
+			"final electric field (imaginary part)",
+			"refractive index at output plane (real part)",
+			"refractive index at output plane (imaginary part)"
+		};
 		for (size_t n = 0; n < sizeof(field_data) / sizeof(field_data[0]); n++) {
 			for (long i = 0; i < P->Nx * P->Ny; i++) {
 				tmp[i] = field_data[n].imagpart ? CIMAGF(field_data[n].data[i])
@@ -1096,6 +1156,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			dataspace_id = H5Screate_simple(2, field_dims, NULL);
 			dataset_id = H5Dcreate(field_group_id, field_data[n].name, H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmp);
+			h5Annotate(dataset_id, field_label[n], (n < 2) ? "arb. unit" : "1",
+			           "y,x", "/metadata/Yc /metadata/Xc");
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
 		}
@@ -1107,6 +1169,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			dataspace_id = H5Screate_simple(2, ixz_dims, NULL);
 			dataset_id = H5Dcreate(field_group_id, "Ixz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Ixz);
+			h5Annotate(dataset_id, "propagation map |E(x, y=Ny/2, z)|^2", "arb. unit",
+			           "z,x", "/trace/z /metadata/Xc");
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
 		}
@@ -1117,6 +1181,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			dataspace_id = H5Screate_simple(2, iyz_dims, NULL);
 			dataset_id = H5Dcreate(field_group_id, "Iyz", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Iyz);
+			h5Annotate(dataset_id, "propagation map |E(x=Nx/2, y, z)|^2", "arb. unit",
+			           "z,y", "/trace/z /metadata/Yc");
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
 		}
@@ -1127,8 +1193,28 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			dataspace_id = H5Screate_simple(3, fr_dims, NULL);
 			dataset_id = H5Dcreate(field_group_id, "frames", H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, Frames);
+			h5Annotate(dataset_id, "snapshot |E(x,y)|^2 along z", "arb. unit",
+			           "frame,y,x", "/field/frames_z /metadata/Yc /metadata/Xc");
+			h5AttrLong(dataset_id, "frame_interval_steps", (long)frameInterval);
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
+			// 各フレームの z 位置 (CPU 版と同一)
+			{
+				double *fz = (double *)malloc((size_t)nframes * sizeof(double));
+				for (long f = 0; f < nframes; f++) {
+					const long t = f * frameInterval;
+					fz[f] = trZ[(t < ntr) ? t : (ntr - 1)];
+				}
+				hsize_t fz_dims[1] = {(hsize_t)nframes};
+				dataspace_id = H5Screate_simple(1, fz_dims, NULL);
+				dataset_id = H5Dcreate(field_group_id, "frames_z", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+				status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, fz);
+				h5Annotate(dataset_id, "z position of each snapshot frame", "m",
+				           "frame", NULL);
+				H5Dclose(dataset_id);
+				H5Sclose(dataspace_id);
+				free(fz);
+			}
 			// 複素電界 (位相表示用)
 			if (framesCplx) {
 				const char *cn[2] = {"frames_r", "frames_i"};
@@ -1137,6 +1223,10 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 					dataspace_id = H5Screate_simple(3, fr_dims, NULL);
 					dataset_id = H5Dcreate(field_group_id, cn[c], H5T_NATIVE_FLOAT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 					status = H5Dwrite(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, cd[c]);
+					h5Annotate(dataset_id,
+					           (c == 0) ? "snapshot E(x,y) along z (real part)"
+					                    : "snapshot E(x,y) along z (imaginary part)",
+					           "arb. unit", "frame,y,x", NULL);
 					H5Dclose(dataset_id);
 					H5Sclose(dataspace_id);
 				}
@@ -1152,20 +1242,30 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		struct {
 			const char *name;
 			const double *data;
+			const char *label;
+			const char *units;
 		} trace_data[] = {
-			{"z",          trZ},
-			{"power",      trPower},
-			{"peak",       trPeak},
-			{"centroid_x", trCx},
-			{"centroid_y", trCy},
-			{"width_x",    trWx},
-			{"width_y",    trWy}
+			{"z",          trZ,      "cross-section position along the propagation axis", "m"},
+			{"power",      trPower,  "cross-section power (W when tpa/powersweep is used)", "arb. unit"},
+			{"peak",       trPeak,   "peak intensity |E|^2",                    "arb. unit"},
+			{"centroid_x", trCx,     "intensity centroid x",                    "m"},
+			{"centroid_y", trCy,     "intensity centroid y",                    "m"},
+			{"width_x",    trWx,     "beam width 2*sigma along x",              "m"},
+			{"width_y",    trWy,     "beam width 2*sigma along y",              "m"}
 		};
+		// このグループが「z を独立変数とする系列」であることを宣言する
+		h5AttrStr(trace_group_id, "description",
+		          "series along the propagation axis (BPM has no time axis)");
+		h5AttrStr(trace_group_id, "axis", "z");
+		h5AttrStr(trace_group_id, "axis_values", "/trace/z");
+		h5AttrLong(trace_group_id, "npoints", (long)ntr);
 		hsize_t tr_dims[1] = {(hsize_t)ntr};
 		for (size_t n = 0; n < sizeof(trace_data) / sizeof(trace_data[0]); n++) {
 			dataspace_id = H5Screate_simple(1, tr_dims, NULL);
 			dataset_id = H5Dcreate(trace_group_id, trace_data[n].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trace_data[n].data);
+			h5Annotate(dataset_id, trace_data[n].label, trace_data[n].units,
+			           "z", "/trace/z");
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
 		}
@@ -1176,6 +1276,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 			dataspace_id = H5Screate_simple(2, ov_dims, NULL);
 			dataset_id = H5Dcreate(trace_group_id, "overlap", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 			status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, trOverlap);
+			h5Annotate(dataset_id, "power fraction in each guided mode", "1",
+			           "mode,z", "/modes/neff /trace/z");
 			H5Dclose(dataset_id);
 			H5Sclose(dataspace_id);
 		}

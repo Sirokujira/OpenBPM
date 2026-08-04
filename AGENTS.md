@@ -84,6 +84,10 @@ obpm_post の入力) + `activation_curve.csv` / `spectrum.csv` (掃引指定時)
 - **main が並行して進む**: 作業開始時と push 前に `git fetch origin main` で分岐確認。
 - **obpm_post は obpm.out を必須入力にする**: BPM の既定出力から消さない。
 - **`I` マクロ**: `bpm_prototype.h` が虚数単位 `I` を定義。変数名に使わない。
+- **BPM に時間軸は無い**: `time_series_data.h5` は OpenFDTD 由来の名前で
+  `Ntime = 1` 固定。系列の独立変数は z で、ルート属性 `marching_axis = "z"` /
+  `marching_axis_values = "/trace/z"` が宣言している (上流 BPM-Matlab の `P.z`
+  と同じ規約)。z を時間軸に見せかける実装はしない。
 - **励振キーワードは 2 系統**: `launch = mode <m> [coef...]` (重ね合わせ可) と
   `modes = <n> [excite]` (解析 + 基本モード励振)。併用時は **launch を優先**し
   `excite` は警告を出して無視する。

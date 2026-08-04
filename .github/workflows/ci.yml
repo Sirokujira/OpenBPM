@@ -79,6 +79,29 @@ jobs:
           grep -q 'not OpenBPM data : 1st line = "OpenMOM"' bad.log
           echo "header check OK"
 
+      # HDF5 の軸宣言 (GUI が横軸を決めるための属性) が消えていないこと。
+      # BPM は時間軸を持たないため、行進軸が z であることをファイル自身が持つ。
+      - name: Smoke test — HDF5 axis declaration (marching axis = z)
+        run: |
+          mkdir -p /tmp/smoke-axis && cd /tmp/smoke-axis
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out "$GITHUB_WORKSPACE/data/sample/fiber_modes.ofd"
+          python3 - <<'EOF'
+          import sys, h5py
+          f = h5py.File("time_series_data.h5", "r")
+          def s(v): return v.decode() if isinstance(v, bytes) else str(v)
+          assert s(f.attrs["marching_axis"]) == "z", f.attrs["marching_axis"]
+          zpath = s(f.attrs["marching_axis_values"])
+          assert zpath == "/trace/z", zpath
+          assert int(f.attrs["time_dependent"]) == 0
+          assert int(f.attrs["marching_steps"]) == f[zpath].shape[0]
+          # 軸を辿ってグラフを描くのに必要な最低限が揃っていること
+          for ds in ("/trace/power", "/field/Ixz", "/trace/overlap"):
+              for a in ("long_name", "units", "dims"):
+                  assert a in f[ds].attrs, (ds, a)
+          assert s(f["/field/Ixz"].attrs["dims"]) == "z,x"
+          print("axis declaration OK:", zpath, f[zpath].shape)
+          EOF
+
       # data/ 直下の全サンプルを実行し HDF5 出力と正常終了を確認する
       # (obpm.out は不要なので -no-fdtd-out でスキップ)
       - name: Smoke test — all samples

@@ -62,7 +62,7 @@ python3 tools/plot_ixz.py time_series_data.h5
 | `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |
 
 出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/Iyz`,
-`/field/frames`, `/trace/*`, `/modes/*`, `/metadata/*`)
+`/field/frames`, `/field/frames_z`, `/trace/*`, `/modes/*`, `/metadata/*`)
 + `obpm.out` (FDTD 形式。obpm_post の入力。`-no-fdtd-out` で省略可)
 + `activation_curve.csv` (`powersweep` 指定時) / `spectrum.csv` (`wlsweep` 指定時)
 
@@ -118,6 +118,12 @@ python3 tools/plot_ixz.py time_series_data.h5
 - **励振キーワードは 2 系統ある**: `launch = mode <m> [coef...]` (重ね合わせ可) と
   `modes = <n> [excite]` (解析 + 基本モード励振)。併用時は **launch を優先**し
   `excite` を無視する (警告を出す)。
+- **BPM に時間軸は無い**: `time_series_data.h5` は OpenFDTD 由来の名前で、
+  `Ntime = 1` 固定・`/metadata/time` も 1 点。系列の独立変数は **z** で、
+  ルート属性 `marching_axis = "z"` / `marching_axis_values = "/trace/z"` が
+  それを宣言している (上流 BPM-Matlab の `P.z` と同じ規約)。z を時間軸に
+  見せかける実装はしない。属性を消すと GUI が横軸を決められなくなる
+  (CI の「HDF5 axis declaration」スモークが検知する)。
 - **Dt/Tw は setup() が自動計算する**: 「ユーザーが指定したか」の判定に
   `Dt != 0` 等は使えない。
 - **CI は obpm.log の "normal end" と HDF5 の存在を検証する**: 終了メッセージや
