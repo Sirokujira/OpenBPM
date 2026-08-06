@@ -194,7 +194,46 @@ BPM を適用したサンプル (波長 1.55um):
   `/metadata/mode_neff` : モード励振 (`launch = mode`) 時の実効屈折率
   (ガウシアン励振では 0))。
 
-#### 伝搬に沿った時系列データ (`/trace`) — GUI 表示用
+#### 系列データの独立変数は「時間」ではなく z
+
+**BPM は定常 (単一周波数) 解法なので時間軸を持ちません。** 出力ファイル名
+`time_series_data.h5` は OpenFDTD 由来の名残で、`/metadata/Ntime` は 1 固定、
+`/metadata/time` も 1 点しかありません。FDTD の時間軸に相当する「行進 (marching)
+軸」は **z (伝搬距離)** です。
+
+この対応は上流の [BPM-Matlab](https://github.com/ankrh/BPM-Matlab) と同じ規約です
+(BPM-Matlab も `P.z` / `P.xzSlice` / `P.modeOverlaps` のように z を独立変数として
+保持し、`imagesc(P.z, P.x, abs(P.xzSlice).^2)` のように z 軸で描画します)。
+RSoft BeamPROP もモニタ値を Z 軸に対して表示します。z を時間軸に見せかける
+実装は行いません。
+
+読み手が推測せずに済むよう、HDF5 側に軸の宣言を書き出しています:
+
+| 属性の場所 | 属性 | 値 |
+|---|---|---|
+| ルート `/` | `solver` | `OpenBPM (beam propagation method)` |
+| ルート `/` | `domain` | `steady-state (single frequency, no time axis)` |
+| ルート `/` | `marching_axis` | `z` |
+| ルート `/` | `marching_axis_values` | `/trace/z` |
+| ルート `/` | `marching_steps` | 伝搬ステップ数 |
+| ルート `/` | `time_dependent` | `0` |
+| `/trace` グループ | `axis` / `axis_values` / `npoints` | `z` / `/trace/z` / ステップ数 |
+| 各データセット | `long_name` / `units` / `dims` / `coordinates` | 例: `z,x` と `/trace/z /metadata/Xc` |
+
+GUI や汎用ビューアは `marching_axis` と `marching_axis_values` を見れば、
+`Ntime` を参照せずに横軸を決められます。
+
+```python
+import h5py
+f = h5py.File("time_series_data.h5", "r")
+print(f.attrs["marching_axis"])          # b'z'
+zpath = f.attrs["marching_axis_values"]  # b'/trace/z'
+z = f[zpath.decode()][:]                 # 横軸 [m]
+p = f["/trace/power"][:]                 # 縦軸
+print(f["/trace/power"].attrs["units"])  # b'arb. unit'
+```
+
+#### 伝搬に沿った系列データ (`/trace`) — GUI 表示用
 
 z ステップごとの断面統計量を 1 次元配列 (長さ = 伝搬ステップ数) で出力します。
 画面側でそのままグラフ表示できます (`tools/plot_ixz.py` の `*_trace.png` も参照)。
@@ -214,6 +253,8 @@ z によらずほぼ一定になり、テーパ/ツイスト/曲げではモー�
 Σ_m η_m < 1 のぶんが放射モード (非導波成分) です。
 
 座標軸は `/metadata/Xc`, `Yc`, `Zc` (セル中心) と `Xn`, `Yn`, `Zn` (節点) を使用できます。
+`frames` を記録した場合は各フレームの z 位置が `/field/frames_z` (nframes) に
+出力されるため、`frame_interval` と `grid_dz` から計算し直す必要はありません。
 `/trace` と `/field/Iyz` は常に出力され、CPU 版・CUDA 版で同一内容です
 (CUDA 版はデバイス上で集計するため転送コストは断面 1 行/列ぶんに収まります)。
 

@@ -58,6 +58,9 @@ def main():
         ei = f["/field/Efinal_i"][:]
         n_out = f["/field/n_out_r"][:] if "/field/n_out_r" in f else None
         frames = f["/field/frames"][:] if "/field/frames" in f else None
+        # 各フレームの z 位置 (ソルバーが座標として書き出す)。
+        # 無い場合は frame_interval と grid_dz から従来どおり計算する。
+        frames_z = f["/field/frames_z"][:] if "/field/frames_z" in f else None
         frames_c = None
         if "/field/frames_r" in f and "/field/frames_i" in f:
             frames_c = f["/field/frames_r"][:] + 1j * f["/field/frames_i"][:]
@@ -221,10 +224,17 @@ def main():
         ax.set_ylabel(f"y [{unit}]")
         fig.colorbar(im, ax=ax)
 
+        def frame_z_um(i):
+            if frames_z is not None:
+                return frames_z[i] * 1e6, unit
+            if dz and frame_interval:
+                return i * frame_interval * dz * 1e6, unit
+            return i, "frame"
+
         def update(i):
             im.set_data(scale(frames[i]))
-            z = (i * frame_interval * dz * 1e6) if (dz and frame_interval) else i
-            ax.set_title(f"|E(x, y)|^2  z = {z:.1f} {unit if dz else 'frame'}")
+            z, zu = frame_z_um(i)
+            ax.set_title(f"|E(x, y)|^2  z = {z:.1f} {zu}")
             return [im]
 
         anim = FuncAnimation(fig, update, frames=nfr, blit=False)
@@ -254,8 +264,13 @@ def main():
         def update_ph(i):
             im.set_data(np.angle(frames_c[i]))
             im.set_alpha(np.clip(amp[i] / amax * 4.0, 0, 1))
-            z = (i * frame_interval * dz * 1e6) if (dz and frame_interval) else i
-            ax.set_title(f"arg(E(x, y))  z = {z:.1f} {unit if dz else 'frame'}")
+            if frames_z is not None:
+                z, zu = frames_z[i] * 1e6, unit
+            elif dz and frame_interval:
+                z, zu = i * frame_interval * dz * 1e6, unit
+            else:
+                z, zu = i, "frame"
+            ax.set_title(f"arg(E(x, y))  z = {z:.1f} {zu}")
             return [im]
 
         anim = FuncAnimation(fig, update_ph, frames=nfr, blit=False)
