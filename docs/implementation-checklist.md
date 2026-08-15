@@ -453,3 +453,31 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
   両系統の併用 (`launch` + `modes ... excite` → 警告 + launch 優先) と
   `wlsweep` + `modes` (波長ごとに neff が 1.447033 → 1.447279 と正しく変化)
   を実行確認。CUDA 12.0 コンパイル検証済み。
+
+- [x] **obpm_post が `/trace` (z 伝搬の推移) 未対応** ✅ 対応済み
+  - 場所: `post/postbpm.c` / `.github/workflows/ci.yml` / `ReadMe.md`
+  - 現状 (対応前): `obpm_post` は `/field` の等高線 (Ixz・Efinal・frames) のみ
+    描画し、`/trace` のスカラー推移は描けなかった。GUI (OpenFDTD-X) は
+    `obpm_post` の ev2 出力を表示するため、伝搬に沿ったグラフを見るには
+    `tools/plot_ixz.py` (Python + matplotlib) が必要だった。
+  - 対応内容: `/trace` の折れ線グラフページを追加した。
+    - `read1d` / `readTrace` : 1 次元データセットの読み出し
+      (`/trace/z` と長さが違うものは横軸に載せられないため読み捨てる)
+    - `tracePage` : z を横軸とする折れ線グラフを 1 枚描く
+      (`ev2dlib_grid` / `ev2dlib_func2` / `ev2dlib_Xaxis` / `ev2dlib_Yaxis`。
+       レイアウトは `post/plot2dFeed.c` の流儀に合わせた)
+    - ページ構成 : パワー / ピーク強度 / ビーム幅 (x,y) / 重心 (x,y) /
+      モード結合率 (先頭 4 モード)。**単位の異なる量を同じ縦軸に混ぜない**
+      ため 1 量ずつページを分ける。縦軸は 0 を含む範囲にして原点からの
+      大小が読めるようにした。
+  - 検証: `fiber_modes.ofd` (Nz=200, modes=3 excite) で ev.ev2 が
+    2 ページ → 7 ページに増加。描画された軸範囲を HDF5 と突き合わせ、
+    power 3.4637e-11 / peak 1.0234 / width max 4.7997e-06 (= max(wx,wy)) /
+    centroid max 1.6733e-07 / eta max 9.9998e-01 がすべて一致することを確認。
+    ビーム幅 4.80um は SMF-28 の LP01 (Marcuse 近似 4.7um) と整合。
+    後方互換 : `/trace` を削除した HDF5 でも落ちずに従来どおり描画すること、
+    `data/` 全 18 サンプルで `obpm_post` が正常終了することを確認。
+    fiber 回帰 (output power 3.122518e+02、bpm_ixz.csv の md5
+    71567bae452c8b134f0a6c201bd8a69c) は不変。ctest 9 本通過。
+  - CI: 3 OS の post スモークに ev2 のページ数判定 (>= 6) と
+    `BPM: propagation traces` のログ判定を追加した。

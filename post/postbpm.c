@@ -6,6 +6,8 @@ BPM 出力 (time_series_data.h5 の /field) の可視化。
   - /field/Efinal_r/i: 最終断面電界 (Ny x Nx) → |E| 等高線ページ
   - /field/frames    : |E(x,y)|^2 スナップショット (nframes x Ny x Nx)
                        → 等間隔に最大 BPM_FRAME_PAGES 枚の等高線ページ
+  - /trace/*         : z 伝搬に沿ったスカラー推移 → 折れ線グラフページ
+                       (パワー・ピーク強度・ビーム幅・重心・モード結合率)
 FDTD 用の post が読む obpm.out には含まれないため、ここで HDF5 を直接読む。
 BPM 出力が無い場合 (純粋な FDTD 実行) は何もしない。
 */
@@ -85,6 +87,105 @@ static double readScalar(hid_t file, const char *path, double def)
 	}
 	H5Dclose(dset);
 	return v;
+}
+
+/* 1次元データセットを読む (呼び出し側で free)。失敗時 NULL、要素数を *n へ */
+static double *read1d(hid_t file, const char *path, hsize_t *n)
+{
+	if (H5Lexists(file, path, H5P_DEFAULT) <= 0) return NULL;
+	hid_t dset = H5Dopen(file, path, H5P_DEFAULT);
+	if (dset < 0) return NULL;
+	hid_t space = H5Dget_space(dset);
+	if (H5Sget_simple_extent_ndims(space) != 1) {
+		H5Sclose(space);
+		H5Dclose(dset);
+		return NULL;
+	}
+	H5Sget_simple_extent_dims(space, n, NULL);
+	double *buf = (double *)malloc((size_t)(*n) * sizeof(double));
+	if (buf != NULL) {
+		if (H5Dread(dset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL,
+		            H5P_DEFAULT, buf) < 0) {
+			free(buf);
+			buf = NULL;
+		}
+	}
+	H5Sclose(space);
+	H5Dclose(dset);
+	return buf;
+}
+
+/* /trace/* を読む。長さが expect と違う場合は破棄して NULL を返す
+   (同じ横軸 /trace/z に載せられないものを描かないため) */
+static double *readTrace(hid_t file, const char *path, hsize_t expect)
+{
+	hsize_t n = 0;
+	double *v = read1d(file, path, &n);
+	if ((v != NULL) && (n != expect)) {
+		free(v);
+		v = NULL;
+	}
+	return v;
+}
+
+/* z を横軸とする折れ線グラフページを1枚描く。
+   nseries 本の系列を同じ縦軸 (共通の min/max) で重ねる。
+   縦軸を共有するので、単位の異なる量を混ぜないこと。 */
+static void tracePage(int nz, const double *z,
+	int nseries, const double *const *series, const char *const *labels,
+	const char *title, const char *ylabel)
+{
+	if ((nz < 2) || (nseries < 1)) return;
+
+	/* 全系列の値域 (0 を含めて原点からの大小が読めるようにする) */
+	double ymin = 0, ymax = 0;
+	for (int m = 0; m < nseries; m++) {
+		for (int i = 0; i < nz; i++) {
+			const double v = series[m][i];
+			if (v < ymin) ymin = v;
+			if (v > ymax) ymax = v;
+		}
+	}
+	if (ymin == ymax) {
+		/* 定数系列 : 目盛りが潰れないよう幅を持たせる */
+		const double d = (ymax != 0) ? (0.05 * fabs(ymax)) : 1.0;
+		ymin -= d;
+		ymax += d;
+	}
+
+	/* レイアウト (post/plot2dFeed.c と同じ流儀) */
+	const double px0 = 0.13 * Width2d;
+	const double px1 = 0.92 * Width2d;
+	const double py0 = 0.13 * Height2d;
+	const double py1 = 0.88 * Height2d;
+	const double fs  = Fontsize2d;
+	/* 系列の色 (最大 4 本。赤・青・緑・マゼンタ) */
+	const unsigned char rgb[4][3] = {
+		{200, 0, 0}, {0, 0, 200}, {0, 140, 0}, {180, 0, 180}
+	};
+
+	char str[BUFSIZ];
+	ev2d_newPage();
+	ev2d_setColor(0, 0, 0);
+	ev2dlib_grid(px0, py0, px1, py1, 10, 10);
+
+	for (int m = 0; m < nseries; m++) {
+		const int c = m % 4;
+		ev2d_setColor(rgb[c][0], rgb[c][1], rgb[c][2]);
+		ev2dlib_func2(nz - 1, z, series[m], ymin, ymax, px0, py0, px1, py1);
+		/* 凡例 (グラフ枠の上に横並び) */
+		ev2d_drawString(px0 + m * 12.0 * fs, py1 + 1.9 * fs, 0.8 * fs, labels[m]);
+	}
+
+	ev2d_setColor(0, 0, 0);
+	ev2d_drawString(px0, py1 + 3.2 * fs, fs, title);
+	sprintf(str, "%.4e", z[0]);
+	char smax[BUFSIZ];
+	sprintf(smax, "%.4e", z[nz - 1]);
+	ev2dlib_Xaxis(px0, px1, py0, 0.8 * fs, str, smax, "z[m]");
+	sprintf(str, "%.4e", ymin);
+	sprintf(smax, "%.4e", ymax);
+	ev2dlib_Yaxis(py0, py1, px0, 0.8 * fs, str, smax, ylabel);
 }
 
 /* dB スケールの等高線ページを1枚描く (data は行 = 縦軸, 列 = 横軸) */
@@ -255,6 +356,82 @@ int plot2dBpm(void)
 		printf("BPM: snapshots %d frames (%d x %d), plotted %d page(s)\n",
 		       nf, ny, nx, npage);
 		free(frames);
+	}
+
+	/* ── z 伝搬に沿ったスカラー推移 (/trace) ──
+	   BPM は定常解法で時間軸を持たない。系列の独立変数は z である
+	   (HDF5 のルート属性 marching_axis = "z" を参照)。
+	   単位の異なる量を同じ縦軸に混ぜないよう、ページを分けて描く。 */
+	if (H5Lexists(file, "/trace", H5P_DEFAULT) > 0) {
+		hsize_t nzt = 0;
+		double *z = read1d(file, "/trace/z", &nzt);
+		if ((z != NULL) && (nzt >= 2)) {
+			const int nz = (int)nzt;
+			/* /trace/* はすべて /trace/z と同じ長さで書かれる。
+			   長さが違うものは (将来の不整合に備えて) 読み捨てる。 */
+			double *power = readTrace(file, "/trace/power", nzt);
+			double *peak  = readTrace(file, "/trace/peak", nzt);
+			double *wx    = readTrace(file, "/trace/width_x", nzt);
+			double *wy    = readTrace(file, "/trace/width_y", nzt);
+			double *cx    = readTrace(file, "/trace/centroid_x", nzt);
+			double *cy    = readTrace(file, "/trace/centroid_y", nzt);
+
+			if (power != NULL) {
+				const double *ser[1] = {power};
+				const char *lab[1] = {"power"};
+				tracePage(nz, z, 1, ser, lab,
+				          "BPM trace : cross-section power", "P");
+				pages++;
+			}
+			if (peak != NULL) {
+				const double *ser[1] = {peak};
+				const char *lab[1] = {"peak"};
+				tracePage(nz, z, 1, ser, lab,
+				          "BPM trace : peak intensity |E|^2", "|E|^2");
+				pages++;
+			}
+			if ((wx != NULL) && (wy != NULL)) {
+				const double *ser[2] = {wx, wy};
+				const char *lab[2] = {"width_x", "width_y"};
+				tracePage(nz, z, 2, ser, lab,
+				          "BPM trace : beam width 2*sigma", "w[m]");
+				pages++;
+			}
+			if ((cx != NULL) && (cy != NULL)) {
+				const double *ser[2] = {cx, cy};
+				const char *lab[2] = {"centroid_x", "centroid_y"};
+				tracePage(nz, z, 2, ser, lab,
+				          "BPM trace : intensity centroid", "c[m]");
+				pages++;
+			}
+
+			/* モード結合率 (nModes x nz) : modes 指定時のみ存在する。
+			   先頭 4 モードまでを 1 ページに重ねる (単位は共通の占有率)。 */
+			hsize_t ovdims[2];
+			double *ov = read2d(file, "/trace/overlap", ovdims);
+			if ((ov != NULL) && ((int)ovdims[1] == nz)) {
+				const int nm = ((int)ovdims[0] < 4) ? (int)ovdims[0] : 4;
+				const double *ser[4];
+				const char *lab[4];
+				char labbuf[4][32];
+				for (int m = 0; m < nm; m++) {
+					ser[m] = &ov[(size_t)m * nz];
+					sprintf(labbuf[m], "mode %d", m + 1);
+					lab[m] = labbuf[m];
+				}
+				tracePage(nz, z, nm, ser, lab,
+				          "BPM trace : mode coupling ratio", "eta");
+				pages++;
+				printf("BPM: trace graphs (%d modes in overlap)\n", (int)ovdims[0]);
+			}
+			free(ov);
+
+			printf("BPM: propagation traces %d points, z = %.6e .. %.6e [m]\n",
+			       nz, z[0], z[nz - 1]);
+			free(power); free(peak);
+			free(wx); free(wy); free(cx); free(cy);
+		}
+		free(z);
 	}
 
 	H5Fclose(file);

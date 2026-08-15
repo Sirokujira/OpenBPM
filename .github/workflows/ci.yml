@@ -55,10 +55,17 @@ jobs:
           grep -q "normal end" obpm.log
           test -s obpm.out
 
+      # obpm_post は /field の等高線に加えて /trace の折れ線グラフページも描く。
+      # GUI はこの ev2 出力を表示するため、ページが欠けないことを判定する。
       - name: Smoke test — post processor
         run: |
           cd /tmp/smoke
-          "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
+          "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd | tee post.log
+          grep -q "BPM: propagation map" post.log
+          grep -q "BPM: propagation traces" post.log
+          # ev2 のページ数 (行頭 -1 = newPage)。伝搬マップ + 最終断面 + /trace 4 枚
+          awk '/^-1 /{n++} END { if (n < 6) { print "FAIL: only " n " page(s) in ev.ev2"; exit 1 }
+               print "post pages OK: " n }' ev.ev2
 
       # 1 行目のプログラム名の受理範囲 (GUI 連携の回帰防止)
       # OpenFDTD-X が書き出す .ofd は "OpenFDTD" ヘッダなので受け付ける必要がある。
@@ -256,10 +263,17 @@ jobs:
           grep -q "normal end" obpm.log
           test -s obpm.out
 
+      # obpm_post は /field の等高線に加えて /trace の折れ線グラフページも描く。
+      # GUI はこの ev2 出力を表示するため、ページが欠けないことを判定する。
       - name: Smoke test — post processor
         run: |
           cd /tmp/smoke
-          "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd
+          "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 fiber.ofd | tee post.log
+          grep -q "BPM: propagation map" post.log
+          grep -q "BPM: propagation traces" post.log
+          # ev2 のページ数 (行頭 -1 = newPage)。伝搬マップ + 最終断面 + /trace 4 枚
+          awk '/^-1 /{n++} END { if (n < 6) { print "FAIL: only " n " page(s) in ev.ev2"; exit 1 }
+               print "post pages OK: " n }' ev.ev2
 
       # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv を生成し、
       # 平面波近似の解析解との一致 (相対 7% 以内) ・単調非増加・飽和を検証する
@@ -398,10 +412,16 @@ jobs:
           & "$env:GITHUB_WORKSPACE\bin\obpm_post.exe" -n 2 fiber.ofd
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      - name: Smoke test — BPM propagation map (post output)
+      # /field の等高線に加えて /trace の折れ線グラフページも描かれること
+      - name: Smoke test — BPM propagation map / traces (post output)
         run: |
           Set-Location smoke
           if (-not (Test-Path bpm_ixz.csv)) { Write-Error "bpm_ixz.csv missing"; exit 1 }
+          if (-not (Test-Path ev.ev2)) { Write-Error "ev.ev2 missing"; exit 1 }
+          # ev2 のページ数 (行頭 "-1 " = newPage)。伝搬マップ + 最終断面 + /trace 4 枚
+          $pages = (Select-String -Path ev.ev2 -Pattern '^-1 ').Count
+          if ($pages -lt 6) { Write-Error "only $pages page(s) in ev.ev2"; exit 1 }
+          Write-Output "post pages OK: $pages"
 
       # ONN 光活性化関数 (tpa + powersweep) : activation_curve.csv を生成し、
       # 平面波近似の解析解との一致 (相対 7% 以内) ・単調非増加・飽和を検証する
