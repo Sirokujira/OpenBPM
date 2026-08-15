@@ -96,6 +96,11 @@ obpm_post の入力) + `activation_curve.csv` / `spectrum.csv` (掃引指定時)
 - **Dt/Tw は setup() が自動計算**: 「ユーザー指定か」の判定に `Dt != 0` は不可。
 - **メッシュ配列**: `Xn/Yn/Zn` は節点 (N+1)、`Xc/Yc/Zc` はセル中心。
   セル幅は `(Xn[Nx]-Xn[0])/Nx` (括弧の位置に注意)。
+- **OpenMP は C と CXX の両方をリンクする**: `OpenMP::OpenMP_C` だけだと
+  `-fopenmp` が C++ ソースに渡らず、`bpm/FDBPMpropagator.c` の `#pragma omp for`
+  が orphaned となって BPM 全体が直列実行になる (バナーは OpenMP と表示する)。
+- **集約に寄与するループは `schedule(static)`**: dynamic だと部分和の項の集合が
+  実行ごとに変わり結果が再現しない。集約もスレッド番号順に固定している。
 - **並列 HDF5 は mpi.h を要求**: `WITH_MPI=ON` 時は CMake が `HDF5::HDF5` に
   `MPI::MPI_C` を伝播させる。壊すと obpm/obpm_post のビルドが落ちる。
 - **CI 全ジョブが数秒で failure ならコードではない**: private リポジトリの

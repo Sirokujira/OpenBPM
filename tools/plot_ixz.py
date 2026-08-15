@@ -141,20 +141,34 @@ def main():
         zum = trace["z"] * 1e6
         panels = [
             # ラベルは英語 (matplotlib の既定フォントは日本語グリフを持たない)
-            ("power",      "cross-section power",  1.0,  None),
-            ("peak",       "peak |E|^2",           1.0,  None),
-            ("centroid_x", "centroid [um]",        1e6,  "centroid_y"),
-            ("width_x",    "beam width 2sigma [um]", 1e6, "width_y"),
+            # 4 番目の要素 = 同じ縦軸に重ねる相方、5 番目 = 入口値で正規化するか
+            #   power / peak は絶対値の桁が入力振幅に依存し、変化量も 1e-4 程度に
+            #   なることがある。生値のまま描くと matplotlib が数値ノイズまで
+            #   拡大表示して「激しく振動している」ように見えるため、入口で
+            #   正規化して 0 を含む縦軸で描く (伝搬損失として読める形にする)。
+            ("power",      "power P(z)/P(0)",        1.0,  None, True),
+            ("peak",       "peak |E|^2 (norm.)",     1.0,  None, True),
+            ("centroid_x", "centroid [um]",          1e6,  "centroid_y", False),
+            ("width_x",    "beam width 2sigma [um]", 1e6,  "width_y", False),
         ]
         avail = [p for p in panels if p[0] in trace]
         fig, axes = plt.subplots(len(avail), 1, figsize=(8, 2.6 * len(avail)), sharex=True)
         axes = np.atleast_1d(axes)
-        for ax, (key, label, sc, pair) in zip(axes, avail):   # sc : scale() 関数を隠さない名前
-            ax.plot(zum, trace[key] * sc, label=key)
+        for ax, (key, label, sc, pair, norm) in zip(axes, avail):  # sc : scale() 関数を隠さない名前
+            def prep(k):
+                v = trace[k] * sc
+                if norm:
+                    v0 = v[0]
+                    return (v / v0) if v0 != 0 else v
+                return v
+            ax.plot(zum, prep(key), label=key)
             if pair and pair in trace:
-                ax.plot(zum, trace[pair] * sc, label=pair)
+                ax.plot(zum, prep(pair), label=pair)
                 ax.legend(fontsize=8)
             ax.set_ylabel(label)
+            if norm:
+                # 0 を含めて「どれだけ減ったか」が一目で分かるようにする
+                ax.set_ylim(0, max(1.05, float(np.max(prep(key))) * 1.05))
             ax.grid(alpha=0.3)
         axes[-1].set_xlabel("z [um]")
         axes[0].set_title("BPM propagation traces (/trace)")

@@ -24,6 +24,9 @@ ctest --test-dir build --output-on-failure   # 解析解との比較検証 (9本
 ```sh
 # 回帰 (fiber): output power = 3.122518e+02 が不変、
 # obpm_post 後の bpm_ixz.csv が変更前と md5 一致であること
+# (md5 比較は「同じスレッド数」同士で行う。BPM は並列実行するため、
+#  電力集約の部分和の個数がスレッド数で変わり最終桁が動く。
+#  output power の 7 桁はスレッド数に依らず不変)
 mkdir -p /tmp/smoke && cp data/sample/fiber.ofd /tmp/smoke/ && cd /tmp/smoke
 $OLDPWD/bin/obpm -n 2 fiber.ofd && $OLDPWD/bin/obpm_post -n 2 fiber.ofd
 grep "normal end" obpm.log
@@ -139,6 +142,16 @@ python3 tools/plot_ixz.py time_series_data.h5
   これを検知する (`--target obpm_mpi` だけでは素通りする)。
 - **メッシュ配列**: `Xn/Yn/Zn` は節点 (要素数 N+1)、`Xc/Yc/Zc` はセル中心。
   セル幅は `(Xn[Nx]-Xn[0])/Nx` (演算子優先順位のバグが過去に複数あった)。
+- **OpenMP は C と CXX の両方をリンクする**: `OpenMP::OpenMP_C` だけだと
+  `-fopenmp` が `$<COMPILE_LANGUAGE:C>` で守られ、C++ ソース
+  (`sol/solve_bpm.cpp` 等) に渡らない。さらに `bpm/FDBPMpropagator.c` の
+  `#pragma omp for` は `solve_bpm.cpp` 側の parallel 領域に束縛されるため、
+  C++ 側が OpenMP 無しだと orphaned となり **BPM 全体が直列実行**になる
+  (バナーは `CPU+OpenMP`、`thread=N` と表示するので気づきにくい)。
+- **集約に寄与するループは `schedule(static)`**: `schedule(dynamic)` だと
+  各スレッドが担当する行が実行ごとに変わり、部分和の項の集合が変化するため
+  同一入力の再実行で結果が一致しなくなる (`wlsweep_check` が落ちる)。
+  集約自体もスレッド番号順に行って順序を固定している。
 
 ## コード規約
 
