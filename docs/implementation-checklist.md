@@ -481,3 +481,36 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
     71567bae452c8b134f0a6c201bd8a69c) は不変。ctest 9 本通過。
   - CI: 3 OS の post スモークに ev2 のページ数判定 (>= 6) と
     `BPM: propagation traces` のログ判定を追加した。
+
+---
+
+# 第 8 回監査: CUDA の「未対応」警告が実装状況と食い違っていた
+
+- [x] **CUDA 版で `tpa` / `powersweep` が実装済みなのに「無視される」と警告していた** ✅ 対応済み
+  - 場所: `cuda/solve_bpm.cu` / `ReadMe.md` / `.claude/rules/cuda.md` / `AGENTS.md`
+  - 現状 (対応前): 第 4 回で CUDA 版に TPA / powersweep を実装した際、
+    実装前に入れていた「無視される」警告ブロックを消し忘れていた。
+    `obpm_cuda` で `tpa` を指定すると
+    `*** warning : keyword 'tpa (CUDA 版は未対応 : CPU 版 obpm を使用してください)'
+    is ignored by the BPM solver.` と表示されるが、**実際には適用されている**。
+    ReadMe と `.claude/rules/cuda.md` も「CPU 版のみ」のままだった。
+  - 影響: サイレント無視の逆で、**正しい結果を「無視された」と誤認させる**。
+    利用者は有効な計算結果を捨てるか、不要に CPU 版へ切り替えることになる。
+  - 実装状況の確認 (削除前に CUDA 側の完全性を検証):
+    - TPA カーネル : 近軸パス (`applyTPA` + `scalePrecisePowerByTPA`) と
+      拡張パス (`wabpm_gpu_tpa`) の**両方**に存在
+    - 物理スケーリング : `physcale` / `E0rawpow` / 初期界の再正規化あり
+    - 実効断面積 `A_eff` の実計算とログ出力あり
+    - 入力パワー掃引ループ (`for isweep`) と `sweepPin`/`sweepPout` の簿記あり
+    - `activation_curve.csv` の出力あり
+    → CPU 版と同じ機能一式が揃っており、「未対応」は誤り。
+  - 対応内容: `ignored[]` から `tpa` / `powersweep` を削除し、代わりに
+    **「実装済みだが GPU 実機未検証」の note** を出すようにした
+    (`*** note : tpa / powersweep are implemented in the CUDA solver but not yet
+    validated on real GPU hardware. Cross-check against the CPU solver (obpm)
+    if accuracy matters.`)。`wlsweep` は実際に未対応なので警告のまま残す。
+    ReadMe / `.claude/rules/cuda.md` / `AGENTS.md` の記述も実態に合わせ、
+    「実装したら『無視される』警告を必ず消す」ことを規約に追加した。
+  - 検証: CUDA 12.0 でのコンパイル検証済み。CUDA 側で実際に TPA が適用される
+    コードパス (両伝搬パス・掃引ループ・CSV 出力) をソース上で確認。
+    CPU 版の挙動・回帰には影響しない (CPU 側のコード変更なし)。

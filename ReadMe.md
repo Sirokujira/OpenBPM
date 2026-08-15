@@ -72,8 +72,13 @@ cmake --build build -j
   - `obpm_cuda` は CPU 版と同じ BPM 機能 (beam/refindex/導電率吸収/メッシュ警告/bend/
     beamtilt、広角 `wideangle`・半ベクトル `polarization` を含む) に対応しています。
     スカラー近軸は `bpm/FDBPMpropagator.cu`、広角/半ベクトルは `bpm/wabpm.cu` を使用します。
-  - **`tpa` / `powersweep` (ONN 光活性化関数) と `wlsweep` (波長掃引) は CPU 版のみ**です。CUDA 版で
-    指定した場合は実行時に warning を表示して無視します (CPU 版 `obpm` を使用してください)。
+  - `tpa` / `powersweep` (ONN 光活性化関数) も CUDA 版に実装済みです
+    (両伝搬パスの TPA カーネル・物理スケーリング・A_eff 算出・掃引ループ・
+    `activation_curve.csv` 出力)。ただし **GPU 実機での実行検証は未実施**のため、
+    実行時に「実機未検証」の note を表示します。精度が要る用途では CPU 版
+    (`obpm`) と突き合わせてください。
+  - **`wlsweep` (波長掃引) は CPU 版のみ**です。CUDA 版で指定した場合は実行時に
+    warning を表示して無視します (先頭波長のみ計算されます)。
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI + 並列 HDF5。例: `libopenmpi-dev libhdf5-openmpi-dev`)
   - `obpm_mpi` は OpenFDTD 由来の **FDTD 時間領域ソルバー (BPM ではない)**。

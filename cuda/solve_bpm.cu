@@ -176,10 +176,7 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	        {rFeed != 0,               "rfeed"},
 	        {iABC == 1,                "abc = 1 (PML; BPM は独自の端部吸収体を使用)"},
 	        {PBCx || PBCy || PBCz,     "pbc"},
-	        // 非線形 TPA / パワー掃引は CPU 版 (obpm) のみ実装。CUDA 版では無視される
-	        // (サイレント無視を避けるため明示的に警告する)
-	        {NTpaB > 0,                "tpa (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
-	        {PowerSweep.npoints > 0,   "powersweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
+	        // 波長掃引は CPU 版 (obpm) のみ実装。CUDA 版は先頭波長のみ計算する
 	        {BPM.wlsweep != 0,         "wlsweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
 	    };
 	    for (size_t n = 0; n < sizeof(ignored) / sizeof(ignored[0]); n++) {
@@ -188,6 +185,16 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	            if (io) fprintf(fp, "%s\n", str);
 	            fprintf(stdout, "%s\n", str);
 	        }
+	    }
+	    // tpa / powersweep は CUDA 版でも実装済み (無視されない) だが、
+	    // GPU 実機での実行検証が未実施のため、その旨だけを伝える。
+	    // 「無視される」と誤って警告すると正しい結果まで捨てられてしまう。
+	    if ((NTpaB > 0) || (PowerSweep.npoints > 0)) {
+	        sprintf(str, "*** note : tpa / powersweep are implemented in the CUDA solver"
+	                     " but not yet validated on real GPU hardware."
+	                     " Cross-check against the CPU solver (obpm) if accuracy matters.");
+	        if (io) fprintf(fp, "%s\n", str);
+	        fprintf(stdout, "%s\n", str);
 	    }
 	    // CUDA 版は波長掃引に未対応 (先頭周波数のみ使用)。
 	    // wlsweep 指定時は上の一覧で専用の warning を出しているため二重に出さない。
