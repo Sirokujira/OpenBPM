@@ -362,7 +362,8 @@ if (WITH_CUDA)
                 #target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C m)
                 #target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C Threads::Threads)
                 #target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C Threads::Threads m)
-                target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C pthread)
+                # obpm と同じ理由で CXX も必要 (host 側の bpm/*.cpp が OpenMP を使う)
+                target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX pthread)
                 #target_link_libraries(obpm PRIVATE MPI::MPI_C OpenMP::OpenMP_C m)
                 target_link_libraries(obpm_cuda PRIVATE m HDF5::HDF5)
             else()
@@ -482,7 +483,13 @@ else()
         # Link OpenMP libraries to the target
         if(OpenMP_C_FOUND)
             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C m)
-            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C ${MATH_LIB} HDF5::HDF5 Eigen3::Eigen)
+            # OpenMP_C だけだと -fopenmp が $<COMPILE_LANGUAGE:C> で守られるため、
+            # C++ ソース (sol/solve_bpm.cpp, bpm/wabpm.cpp, bpm/modes.cpp) に
+            # -fopenmp が渡らない。さらに bpm/FDBPMpropagator.c の `#pragma omp for`
+            # は solve_bpm.cpp 側の parallel 領域に束縛されるため、C++ 側が
+            # OpenMP 無しだと orphaned となり BPM 全体が直列実行になる。
+            # C と CXX の両方をリンクすること。
+            target_link_libraries(obpm PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX ${MATH_LIB} HDF5::HDF5 Eigen3::Eigen)
             #target_link_libraries(obpm PRIVATE OpenMP::OpenMP_CXX m)
         else()
             #target_link_libraries(obpm PRIVATE m)

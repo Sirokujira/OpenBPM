@@ -155,7 +155,11 @@ void substep2b(struct parameters *P_global) {
   long i,ix,iy;
   #ifdef _OPENMP
   long threadNum = omp_get_thread_num();
-  #pragma omp for schedule(dynamic)
+  // 集約 (EfieldPowerThread) に寄与するループは schedule(static) にする。
+  // dynamic だと各スレッドが担当する行が実行ごとに変わり、部分和の項の集合が
+  // 変化するため、集約順を固定しても結果が再現しない。
+  // 行あたりの計算量は一定なので static でも負荷分散上の不利はない。
+  #pragma omp for schedule(static)
   #else
   long threadNum = 0;
   #endif
@@ -182,24 +186,38 @@ void substep2b(struct parameters *P_global) {
       EfieldPowerThread += sqrf(CREALF(P->E2[i])) + sqrf(CIMAGF(P->E2[i]));
     }
   }
+  // 集約は「スレッド番号順」に行う (決定性の確保)。
+  // 上流 BPM-Matlab は #pragma omp atomic を使うが、atomic は加算順が実行ごとに
+  // 変わるため float の丸め差で同一入力の再実行でも結果が一致しなくなる
+  // (実測 : 相対 1e-6 程度。これが波長掃引の一致検証を落としていた)。
+  // 加算する項の集合は同じで順序だけを固定するため、数値的な意味は変わらない。
   #ifdef _OPENMP
-  #pragma omp atomic
-  #endif
-  P->EfieldPower += EfieldPowerThread;
-  #ifdef _OPENMP
+  for(int t = 0; t < omp_get_num_threads(); t++) {
+    #pragma omp barrier
+    if(threadNum == t) P->EfieldPower += EfieldPowerThread;
+  }
   #pragma omp barrier
+  #else
+  P->EfieldPower += EfieldPowerThread;
   #endif
 }
 
 void applyMultiplier(struct parameters *P_global, long iz, struct debug *D) {
   float precisePowerDiffThread = 0.0f;
+  #ifdef _OPENMP
+  long threadNum = omp_get_thread_num();
+  #else
+  long threadNum = 0;
+  #endif
   struct parameters *P = P_global;
   float fieldCorrection = sqrtf((float)P->precisePower/P->EfieldPower);
   float cosvalue = cosf(-P->twistPerStep*iz); // Minus is because we go from the rotated frame to the source frame
   float sinvalue = sinf(-P->twistPerStep*iz);
   float scaling = 1/(1 - P->taperPerStep*iz); // Take reciprocal because we go from scaled frame to unscaled frame
   #ifdef _OPENMP // 2
-  #pragma omp for schedule(dynamic)
+  // 集約 (precisePowerDiffThread) に寄与するため schedule(static) にする
+  // (理由は substep2b のコメントを参照)
+  #pragma omp for schedule(static)
   #endif // 2
   for(long i=0;i<P->Nx*P->Ny;i++) {
     long ix = i%P->Nx;
@@ -241,12 +259,19 @@ void applyMultiplier(struct parameters *P_global, long iz, struct debug *D) {
     precisePowerDiffThread += (sqrf(CREALF(P->E2[i])) + sqrf(CIMAGF(P->E2[i])))*(1 - 1/anormsqr);
   }
 
+  // 集約は「スレッド番号順」に行う (決定性の確保)。
+  // 上流 BPM-Matlab は #pragma omp atomic を使うが、atomic は加算順が実行ごとに
+  // 変わるため float の丸め差で同一入力の再実行でも結果が一致しなくなる
+  // (実測 : 相対 1e-6 程度。これが波長掃引の一致検証を落としていた)。
+  // 加算する項の集合は同じで順序だけを固定するため、数値的な意味は変わらない。
   #ifdef _OPENMP // 2
-  #pragma omp atomic
-  #endif // 2
-  P->precisePowerDiff += precisePowerDiffThread;
-  #ifdef _OPENMP // 2
+  for(int t = 0; t < omp_get_num_threads(); t++) {
+    #pragma omp barrier
+    if(threadNum == t) P->precisePowerDiff += precisePowerDiffThread;
+  }
   #pragma omp barrier
+  #else // 2
+  P->precisePowerDiff += precisePowerDiffThread;
   #endif // 2
 }
 
