@@ -59,7 +59,7 @@ LP モード、GI 自己集束ピッチ、チルト変位) は `.claude/rules/ph
 | `bpm/wabpm.cpp/.cu` | 広角/半ベクトルの一般化 ADI (倍精度) |
 | `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` と `modes = <n>` から使用 |
 | `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
-| `post/postbpm.c` | obpm_post の BPM (/field) 可視化 |
+| `post/postbpm.c` | obpm_post の BPM 可視化 (/field 等高線 + /trace 折れ線グラフ) |
 | `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN/モードビート/波長掃引) |
 | `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証 (`check_activation.sh`) |
 | `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |

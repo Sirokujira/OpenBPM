@@ -18,11 +18,14 @@ FDBPM (Douglas-Gunn ADI 法) を移植しています。
 
 > ℹ **既知事項**:
 > - `obpm_post` は OpenFDTD 由来の FDTD 量の描画 (obpm.out ベース) に加え、
->   BPM が `time_series_data.h5` の `/field` に書く伝搬マップ (`Ixz`)・
->   最終電界 (`Efinal_*`)・伝搬スナップショット (`frames`、等間隔に最大 6 枚) の
->   可視化にも対応しています (`post/postbpm.c`)。
->   `/trace` や `/modes` などのグラフ表示は `tools/plot_ixz.py` (PNG/GIF) を
->   使うか、HDF5 を Python (h5py) で直接読んでください。
+>   BPM が `time_series_data.h5` に書く伝搬マップ (`/field/Ixz`)・
+>   最終電界 (`Efinal_*`)・伝搬スナップショット (`frames`、等間隔に最大 6 枚)・
+>   **z 伝搬に沿ったスカラー推移 (`/trace`) の折れ線グラフ**の可視化にも
+>   対応しています (`post/postbpm.c`)。`/trace` はパワー・ピーク強度・
+>   ビーム幅・重心・モード結合率を 1 量ずつページに分けて描きます
+>   (単位の異なる量を同じ縦軸に混ぜないため)。
+>   モード形状 (`/modes`) の表示や GIF アニメーションは
+>   `tools/plot_ixz.py` を使うか、HDF5 を Python (h5py) で直接読んでください。
 >   GUI (OpenFDTD-X) の H5 ビューアからも参照できます。
 > - obpm.out (FDTD 形式、BPM ではほぼゼロの大容量バイナリ) が不要な場合は
 >   ソルバーに `-no-fdtd-out` を付けるとスキップできます

@@ -54,7 +54,7 @@ python3 tools/plot_ixz.py time_series_data.h5
 | `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` と `modes = <n>` から使用 |
 | `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
 | `include/` | ヘッダ。グローバル状態は `obpm.h` (EXTERN パターン)、BPM API は `include/bpm/` |
-| `post/postbpm.c` | obpm_post の BPM (/field) 可視化 |
+| `post/postbpm.c` | obpm_post の BPM 可視化 (/field 等高線 + /trace 折れ線グラフ) |
 | `mpi/`, `cuda_mpi/` | MPI 版 (FDTD のみ、BPM 未対応) |
 | `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN 活性化 / モードビート / 波長掃引) |
 | `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証スクリプト (`check_activation.sh`) |
