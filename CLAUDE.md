@@ -22,7 +22,7 @@ ctest --test-dir build --output-on-failure   # 解析解との比較検証 (9本
 ```
 
 ```sh
-# 回帰 (fiber): output power = 3.122518e+02 が不変、
+# 回帰 (fiber): output power = 3.122506e+02 が不変、
 # obpm_post 後の bpm_ixz.csv が変更前と md5 一致であること
 # (md5 比較は「同じスレッド数」同士で行う。BPM は並列実行するため、
 #  電力集約の部分和の個数がスレッド数で変わり最終桁が動く。
