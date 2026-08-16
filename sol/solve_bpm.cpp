@@ -121,6 +121,43 @@ static void computeTrace(int Nx, int Ny, const double *xc, const double *yc,
     }
 }
 
+// ============================================================
+// BPM 用のセル中心材料 ID
+//   FDTD の iEx 等の材料 ID は Yee 千鳥格子でサンプリングされる
+//   (Ex は (Xc, Yn, Zn) : y と z が節点)。これを BPM の屈折率分布に流用すると、
+//   界の座標 (Xc, Yc) に対して材料分布だけが y に半セルずれる
+//   (円形コアが上下非対称になる : 実測で非対称セル 48、コア重心 +dy/2)。
+//   setupId() と同じ描画順 (後の geometry が上書き)・同じ既定値 (id 0)・
+//   同じ eps を使い、セル中心 (Xc, Yc, Zc) に対して直接ラスタライズする。
+// ============================================================
+static id_t bpmIdPoint(double x, double y, double z)
+{
+    const double geps = EPS * sqrt(
+        ((Xn[Nx] - Xn[0]) * (Xn[Nx] - Xn[0])) +
+        ((Yn[Ny] - Yn[0]) * (Yn[Ny] - Yn[0])) +
+        ((Zn[Nz] - Zn[0]) * (Zn[Nz] - Zn[0])));
+    id_t id = 0;
+    for (int64_t n = 0; n < NGeometry; n++) {
+        if (ingeometry(x, y, z, Geometry[n].shape, Geometry[n].g, geps)) {
+            id = Geometry[n].m;
+        }
+    }
+    return id;
+}
+
+// スライス iz のセル中心材料 ID を ids[ix + Nx*iy] へ格納する
+static void bpmIdSlice(id_t *ids, int64_t iz)
+{
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            ids[ix + ((long)iy * Nx)] = bpmIdPoint(Xc[ix], Yc[iy], Zc[iz]);
+        }
+    }
+}
+
 void solve_bpm(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
     // 関数から?(fp の入替え?)
@@ -198,6 +235,12 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 材料毎の複素屈折率テーブル : n = sqrt(epsr - i*sigma/(omega*eps0))
     // 損失を imag(n) > 0 として格納する (applyMultiplier の exp(d*imag(n)), d < 0 の規約)
     floatcomplex *n_mat = (floatcomplex *)malloc(NMaterial * sizeof(floatcomplex));
+
+    // セル中心材料 ID のスライスバッファ (bpmIdSlice の出力先)
+    //   bpmIdIn : 入力断面 (iz_start)。テーパ/ツイストの座標変換の参照元
+    //   bpmIdZ  : 現在のスライス (伝搬ループ内で毎ステップ更新)
+    id_t *bpmIdIn = (id_t *)malloc((size_t)Nx * Ny * sizeof(id_t));
+    id_t *bpmIdZ  = (id_t *)malloc((size_t)Nx * Ny * sizeof(id_t));
     {
         const double omega = 2 * PI * SPEED_OF_LIGHT / lambda;
         for (int64_t m = 0; m < NMaterial; m++) {
@@ -262,8 +305,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         P->n_0 = (float)BPM.n0;
     }
     else {
-        int64_t nn0 = NA(Nx / 2, Ny / 2, 0);
-        P->n_0 = CREALF(n_mat[iEx[nn0]]);
+        P->n_0 = CREALF(n_mat[bpmIdPoint(Xc[Nx / 2], Yc[Ny / 2], Zc[0])]);
     }
 
     // 位相・損失係数 d = -dz*k0
@@ -424,8 +466,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             n_mat[m] = vw;
         }
         if (BPM.n0 <= 0) {
-            int64_t nn0w = NA(Nx / 2, Ny / 2, 0);
-            P->n_0 = CREALF(n_mat[iEx[nn0w]]);
+            P->n_0 = CREALF(n_mat[bpmIdPoint(Xc[Nx / 2], Yc[Ny / 2], Zc[0])]);
         }
         P->d  = (float)(-P->dz * k0);
         P->ax = -I * (float)(P->dz / (4 * P->dx * P->dx * k0 * P->n_0));
@@ -493,9 +534,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         const long Nm = (long)Nx * Ny;
         std::complex<double> *n2m = new std::complex<double>[Nm];
         double nmax = 0;
+        bpmIdSlice(bpmIdZ, 0);
         for (int iy = 0; iy < Ny; iy++) {
             for (int ix = 0; ix < Nx; ix++) {
-                const floatcomplex nmv = n_mat[iEx[NA(ix, iy, 0)]];
+                const floatcomplex nmv = n_mat[bpmIdZ[(long)Nx * iy + ix]];
                 std::complex<double> nn(CREALF(nmv), -CIMAGF(nmv));
                 n2m[(long)Nx * iy + ix] = nn * nn;
                 if (nn.real() > nmax) nmax = nn.real();
@@ -625,9 +667,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // 入力断面の比誘電率 (実部のみ : モードは無損失断面で定義する)
         std::complex<double> *n2m = new std::complex<double>[NN2];
         double nmax = P->n_0;
+        bpmIdSlice(bpmIdZ, P->iz_start);
         for (int iy = 0; iy < P->Ny; iy++) {
             for (int ix = 0; ix < P->Nx; ix++) {
-                const floatcomplex nm = n_mat[iEx[NA(ix, iy, P->iz_start)]];
+                const floatcomplex nm = n_mat[bpmIdZ[ix + (long)iy * P->Nx]];
                 const double nr = CREALF(nm);
                 n2m[ix + (long)iy * P->Nx] = std::complex<double>(nr * nr, 0.0);
                 if (nr > nmax) nmax = nr;
@@ -834,6 +877,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             Ed[i] = std::complex<double>(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
         }
 
+        // テーパ/ツイスト : 座標変換の参照元となる入力断面の材料 ID を確定する
+        if (xform) {
+            bpmIdSlice(bpmIdIn, P->iz_start);
+        }
+
         for (long iz = P->iz_start; iz < P->iz_end; iz++) {
             sprintf(str, "step iz : %ld / %ld", iz + 1, (long)Nz);
             fprintf(stdout, "%s\n", str);
@@ -847,6 +895,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             const double xfScale = 1.0 / (1.0 - (double)P->taperPerStep * izr);
             const double xfCos = cos(-(double)P->twistPerStep * izr);
             const double xfSin = sin(-(double)P->twistPerStep * izr);
+            bpmIdSlice(bpmIdZ, iz);   // 現スライスのセル中心 ID (n2 と TPA が参照)
             for (int iy = 0; iy < P->Ny; iy++) {
                 for (int ix = 0; ix < P->Nx; ix++) {
                     long index = (long)(P->Nx * iy) + ix;
@@ -865,17 +914,17 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                         const int j0 = (int)floor(fy);
                         const double tx = fx - i0;
                         const double ty = fy - j0;
-                        const floatcomplex n00 = n_mat[iEx[NA(i0,     j0,     P->iz_start)]];
-                        const floatcomplex n10 = n_mat[iEx[NA(i0 + 1, j0,     P->iz_start)]];
-                        const floatcomplex n01 = n_mat[iEx[NA(i0,     j0 + 1, P->iz_start)]];
-                        const floatcomplex n11 = n_mat[iEx[NA(i0 + 1, j0 + 1, P->iz_start)]];
+                        const floatcomplex n00 = n_mat[bpmIdIn[i0     + ((long)j0       * P->Nx)]];
+                        const floatcomplex n10 = n_mat[bpmIdIn[i0 + 1 + ((long)j0       * P->Nx)]];
+                        const floatcomplex n01 = n_mat[bpmIdIn[i0     + ((long)(j0 + 1) * P->Nx)]];
+                        const floatcomplex n11 = n_mat[bpmIdIn[i0 + 1 + ((long)(j0 + 1) * P->Nx)]];
                         nr    = ((1 - tx) * (1 - ty) * CREALF(n00)) + (tx * (1 - ty) * CREALF(n10))
                               + ((1 - tx) * ty * CREALF(n01))       + (tx * ty * CREALF(n11));
                         nimag = ((1 - tx) * (1 - ty) * CIMAGF(n00)) + (tx * (1 - ty) * CIMAGF(n10))
                               + ((1 - tx) * ty * CIMAGF(n01))       + (tx * ty * CIMAGF(n11));
                     }
                     else {
-                        const floatcomplex nm = n_mat[iEx[NA(ix, iy, iz)]];
+                        const floatcomplex nm = n_mat[bpmIdZ[index]];
                         nr    = CREALF(nm);
                         nimag = CIMAGF(nm);
                     }
@@ -904,7 +953,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 for (int iy = 0; iy < P->Ny; iy++) {
                     for (int ix = 0; ix < P->Nx; ix++) {
                         const long index = (long)(P->Nx * iy) + ix;
-                        const double beta = tpa_mat[iEx[NA(ix, iy, iz)]];
+                        const double beta = tpa_mat[bpmIdZ[index]];
                         if (beta > 0) {
                             const double i2 = std::norm(Ed[index]);
                             Ed[index] *= exp(-0.5 * beta * i2 * Dz);
@@ -960,10 +1009,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             power += std::norm(Ed[i]);
         }
         P->precisePower = power;
+        bpmIdSlice(bpmIdZ, P->iz_end - 1);
         for (int iy = 0; iy < P->Ny; iy++) {
             for (int ix = 0; ix < P->Nx; ix++) {
                 long index = (long)(P->Nx * iy) + ix;
-                P->n_out[index] = n_mat[iEx[NA(ix, iy, P->iz_end - 1)]];
+                P->n_out[index] = n_mat[bpmIdZ[index]];
             }
         }
         delete[] Ed;
@@ -980,13 +1030,13 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // このスライスの複素屈折率分布を材料 ID から設定 (虚部 = 導電率による吸収)
         // テーパ/ツイスト指定時は入力断面を渡し、z 変化はカーネル側の座標変換に任せる
         const int64_t iz_n = xform ? P->iz_start : iz;
+        bpmIdSlice(bpmIdZ, iz_n);
         for (int iy = 0; iy < P->Ny; iy++)
         {
             for (int ix = 0; ix < P->Nx; ix++)
             {
                 long index = (long)(P->Nx * iy) + ix;
-                int64_t nn = NA(ix, iy, iz_n);
-                P->n_in[index] = n_mat[iEx[nn]];
+                P->n_in[index] = n_mat[bpmIdZ[index]];
             }
         }
 
@@ -1009,13 +1059,14 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // TPA 減衰を打ち消さないよう、電力簿記 precisePower も同率で減らす。
         if (haveTpa) {
             updatePrecisePower(P);  // 係留中の precisePowerDiff を先に確定する
+            if (xform) bpmIdSlice(bpmIdZ, iz);   // TPA は実スライスの材料を参照する
             double pb = 0, pa = 0;
             for (int iy = 0; iy < P->Ny; iy++) {
                 for (int ix = 0; ix < P->Nx; ix++) {
                     const long index = (long)(P->Nx * iy) + ix;
                     const floatcomplex e = P->E2[index];
                     const double i2 = ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
-                    const double beta = tpa_mat[iEx[NA(ix, iy, iz)]];
+                    const double beta = tpa_mat[bpmIdZ[index]];
                     pb += i2;
                     if (beta > 0) {
                         const float g = (float)exp(-0.5 * beta * i2 * Dz);
@@ -1636,6 +1687,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     free(wlTrans);
     free(n_mat);
     free(tpa_mat);
+    free(bpmIdIn);
+    free(bpmIdZ);
     if (E0 != NULL) free(E0);
     if (sweepPin != NULL) free(sweepPin);
     if (sweepPout != NULL) free(sweepPout);

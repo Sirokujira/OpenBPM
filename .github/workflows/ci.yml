@@ -78,7 +78,7 @@ jobs:
           # OpenFDTD ヘッダ : 受理され OpenBPM ヘッダと同一の結果になること
           "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out hdr_fdtd.ofd
           grep -q "normal end" obpm.log
-          grep -q "output power = 3.122518e+02" obpm.log
+          grep -q "output power = 3.122506e+02" obpm.log
           # 未知のヘッダ : 非ゼロ終了し、読んだ名前がメッセージに出ること
           if "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out hdr_bad.ofd > bad.log 2>&1; then
             echo "FAIL: unknown header was accepted"; cat bad.log; exit 1
@@ -155,7 +155,7 @@ jobs:
                END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
 
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
-      # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
+      # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)
       - name: Smoke test — taper / twist (coordinate transform)
         run: |
           mkdir -p /tmp/smoke-tt && cp data/sample/taper_twist.ofd /tmp/smoke-tt/
@@ -308,7 +308,7 @@ jobs:
                END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
 
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
-      # (入射ガウシアン w0=4um の生パワー 226.2 に対し P/P0 = 0.9985)
+      # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)
       - name: Smoke test — taper / twist (coordinate transform)
         run: |
           mkdir -p /tmp/smoke-tt && cp data/sample/taper_twist.ofd /tmp/smoke-tt/

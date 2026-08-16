@@ -10,14 +10,14 @@
 #        u J1(u)/J0(u) = w K1(w)/K0(w),  u^2 + w^2 = V^2
 #      の厳密解 neff = 1.447167 と一致する (このグリッドで誤差 < 1e-5)
 #   3. excite 指定によりガウシアン (Marcuse 近似) ではなく厳密な数値モードで
-#      励振され、電力保存が向上する (T = 0.99999 vs ガウシアン 0.99988)
+#      励振され、電力保存が向上する (T = 0.99999 vs ガウシアン 0.99987)
 #   4. /modes/mode1 (Ny x Nx) と /modes/neff が HDF5 に出力される
 #   5. /trace/overlap (nModes x Nz) にモード結合率 eta_m(z) が出力される。
 #      直線導波路なので eta_1 は z によらずほぼ一定で、
 #        excite 指定時   : eta_1 = 0.9999 (モード整合励振)
-#        excite 未指定時 : eta_1 = 0.9938 (ガウシアン近似との不整合ぶん)
-#      beamtilt = 1 0 を加えると eta_1 = 0.9457 となり、ガウシアン近似の
-#      解析値 eta = exp(-(k0*n0*sin(theta)*w0/2)^2) = 0.9440 と 0.2% で一致する
+#        excite 未指定時 : eta_1 = 0.9944 (ガウシアン近似との不整合ぶん)
+#      beamtilt = 1 0 を加えると eta_1 = 0.9454 となり、ガウシアン近似の
+#      解析値 eta = exp(-(k0*n0*sin(theta)*w0/2)^2) = 0.9440 と 0.15% で一致する
 OpenBPM 2 2
 title = fiber mode analysis (BPM sample)
 

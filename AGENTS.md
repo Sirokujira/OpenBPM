@@ -20,7 +20,7 @@ ctest --test-dir build --output-on-failure   # 解析解との比較検証 9 本
 
 回帰 (必ず確認):
 - `bin/obpm -n 2 data/sample/fiber.ofd` → obpm.log に `normal end`、
-  `output power = 3.122518e+02` が**不変**であること
+  `output power = 3.122506e+02` が**不変**であること
 - `obpm_post` 後の `bpm_ixz.csv` が変更前と md5 一致であること
 
 ## 物理検証ファースト (最重要ルール)
