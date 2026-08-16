@@ -1,0 +1,39 @@
+# OpenBPM sample : graded-index lens via ripfile (屈折率分布の直接入力)
+#
+# geometry プリミティブを一切使わず、ripfile = grin_rip.csv (放物型 GRIN,
+# tools/make_grin_rip.py で生成) で屈折率分布を与える。
+#   n(r) = 1.47 * sqrt(1 - 2*0.02*(r/10um)^2)   (クラッドは r=10um で一定)
+#
+# 期待される物理 (検証ポイント):
+#   1. 放物分布では近軸ビームが調和振動し、オフセット入射 (x0 = 3um) の
+#      ビーム重心が x(z) = x0*cos(2*pi*z/Lambda) で振動する
+#   2. 自己集束ピッチの理論値 Lambda = 2*pi*a/sqrt(2*Delta) = 314.16 um。
+#      /trace/centroid_x のコサインフィットで 315.6 um (誤差 0.46%)。
+#      最初の符号反転 (1/4 周期) は Lambda/4 = 78.5 um に現れる
+#   3. 滑らかな分布のため、階段近似 (fiber_gi_mmf.ofd の 8 層) より
+#      理論値に近いピッチが得られる
+OpenBPM 2 2
+title = GRIN lens via ripfile (BPM sample)
+
+xmesh = -15e-6 90 15e-6
+ymesh = -15e-6 90 15e-6
+zmesh = 0 660 330e-6
+
+# 屈折率分布の直接入力 (相対パスは本ファイルのディレクトリ基準でも解決される)
+ripfile = grin_rip.csv
+
+# feed = <dir> <x> <y> <z> <volt> <delay> <z0> : ビーム中心はオフセット 3um
+feed = Z 3e-6 0 0 1 0 0
+
+# beam = <w0[m]>
+beam = 4e-6
+
+# refindex = <n0> : GRIN 軸上の屈折率
+refindex = 1.47
+
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end

@@ -253,6 +253,7 @@ EXTERN struct {
 	int    launchNModes;      // number of superposed modes (0 = gaussian)
 	int    launchIdx[BPM_MAX_LAUNCH_MODES];    // mode indices
 	double launchCoef[BPM_MAX_LAUNCH_MODES];   // superposition coefficients
+	char   ripfile[1024];     // refractive index profile file ("" = use geometry)
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {
@@ -266,6 +267,7 @@ typedef struct {
 EXTERN int          VECTOR;                  // 0=no-vector, 1=vector
 
 EXTERN char         Title[256];              // title
+EXTERN char         InputPath[1024];         // 入力 .ofd のパス (ripfile の相対解決用)
 
 EXTERN int          Nx, Ny, Nz;              // number of cells
 EXTERN int          iMin, iMax, jMin, jMax, kMin, kMax;  // non-MPI : 0, Nx, 0, Ny, 0, Nz

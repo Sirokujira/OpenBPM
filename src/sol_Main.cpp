@@ -34,6 +34,7 @@ int main(int argc, char *argv[])
 	char fn_in[BUFSIZ] = "";
 	char fn_out[BUFSIZ] = "obpm.out";
 	args(argc, argv, &nthread, &prompt, &fdtd_out, fn_in, fn_out);
+	strcpy(InputPath, fn_in);   // ripfile の相対パス解決に使用
 	//printf("%d %d %s %s\n", nthread, prompt, fn_in, fn_out);
 
 	// set number of threads

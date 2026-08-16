@@ -154,6 +154,27 @@ jobs:
                print "mode overlap OK: eta_1 = " e; ok = 1 }
                END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
 
+      # 屈折率分布の直接入力 (ripfile) : 放物型 GRIN の自己集束ピッチを
+      # 理論値 Lambda = 2*pi*a/sqrt(2*Delta) = 314.16 um と比較する (±2%)。
+      # 実測 0.46% (離散化 dz=0.5um とフィット分解能ぶんのマージンを含む)
+      - name: Smoke test — GRIN via ripfile (self-focusing pitch)
+        run: |
+          mkdir -p /tmp/smoke-grin && cd /tmp/smoke-grin
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out "$GITHUB_WORKSPACE/data/sample/grin.ofd"
+          grep -q "normal end" obpm.log
+          grep -q "ripfile : grin_rip.csv" obpm.log
+          python3 - <<'EOF'
+          import h5py, numpy as np
+          f = h5py.File("time_series_data.h5", "r")
+          z = f["/trace/z"][:]; cx = f["/trace/centroid_x"][:]
+          L_th = 2 * np.pi * 10e-6 / np.sqrt(0.04)
+          periods = np.linspace(250e-6, 400e-6, 3001)
+          best = min(periods, key=lambda L: np.sum((cx - cx[0] * np.cos(2 * np.pi * z / L)) ** 2))
+          err = abs(best - L_th) / L_th
+          assert err < 0.02, f"pitch {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err:.3f})"
+          print(f"GRIN pitch OK: {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err*100:.2f}%)")
+          EOF
+
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)
       - name: Smoke test — taper / twist (coordinate transform)
@@ -306,6 +327,27 @@ jobs:
                if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
                print "mode overlap OK: eta_1 = " e; ok = 1 }
                END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
+
+      # 屈折率分布の直接入力 (ripfile) : 放物型 GRIN の自己集束ピッチを
+      # 理論値 Lambda = 2*pi*a/sqrt(2*Delta) = 314.16 um と比較する (±2%)。
+      # 実測 0.46% (離散化 dz=0.5um とフィット分解能ぶんのマージンを含む)
+      - name: Smoke test — GRIN via ripfile (self-focusing pitch)
+        run: |
+          mkdir -p /tmp/smoke-grin && cd /tmp/smoke-grin
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out "$GITHUB_WORKSPACE/data/sample/grin.ofd"
+          grep -q "normal end" obpm.log
+          grep -q "ripfile : grin_rip.csv" obpm.log
+          python3 - <<'EOF'
+          import h5py, numpy as np
+          f = h5py.File("time_series_data.h5", "r")
+          z = f["/trace/z"][:]; cx = f["/trace/centroid_x"][:]
+          L_th = 2 * np.pi * 10e-6 / np.sqrt(0.04)
+          periods = np.linspace(250e-6, 400e-6, 3001)
+          best = min(periods, key=lambda L: np.sum((cx - cx[0] * np.cos(2 * np.pi * z / L)) ** 2))
+          err = abs(best - L_th) / L_th
+          assert err < 0.02, f"pitch {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err:.3f})"
+          print(f"GRIN pitch OK: {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err*100:.2f}%)")
+          EOF
 
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)

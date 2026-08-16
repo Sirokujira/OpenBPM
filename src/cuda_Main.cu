@@ -38,6 +38,7 @@ int main(int argc, char *argv[])
 	char fn_in[BUFSIZ] = "";
 	char fn_out[BUFSIZ] = "obpm.out";
 	args(argc, argv, &device, &prompt, &fdtd_out, fn_in, fn_out);
+	strcpy(InputPath, fn_in);   // ripfile の相対パス解決に使用
 
 	// cpu time
 	if (GPU) cudaDeviceSynchronize();

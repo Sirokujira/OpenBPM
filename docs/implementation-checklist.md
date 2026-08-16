@@ -618,3 +618,38 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
     - fiber_modes: ガウシアン T 0.99988 → 0.99987、eta_1 0.9938 → 0.9944、
       チルト eta_1 0.9457 → 0.9454
     - CI の grep・CLAUDE.md・AGENTS.md・サンプルコメントを一括更新した
+
+---
+
+# 第 11 回: 機能追加 — 屈折率分布の直接入力 (ripfile)
+
+- [x] **任意の屈折率分布を与えられない (geometry プリミティブのみ)** ✅ 対応済み
+  - 場所: `include/obpm.h` / `sol/input_data.c` / `sol/solve_bpm.cpp` /
+    `cuda/solve_bpm.cu` / `data/sample/grin.ofd` / `tools/make_grin_rip.py`
+  - 現状 (対応前): 上流 BPM-Matlab は RIP (屈折率分布) を任意の行列で与えられる
+    のに対し、移植では OpenFDTD の geometry プリミティブ経由に限定されていた。
+    GRIN のような滑らかな分布は階段近似 (fiber_gi_mmf.ofd の 8 層) しか
+    できなかった。上流比の実装漏れ。
+  - 対応内容: `ripfile = <path>` キーワードを追加。
+    - `.csv` : 2D (Ny 行 x Nx 列, 実数 n)。z 不変
+    - `.h5`/`.hdf5` : データセット `/rip/n`。2D または 3D (Nz x Ny x Nx)
+    - 寸法はメッシュと厳密一致 (不一致は期待寸法つきエラーで停止)
+    - 相対パスは入力 .ofd のディレクトリ基準でも解決 (`InputPath` グローバルを
+      追加し main で設定。GUI からの起動を想定)
+    - 実装は屈折率スライス構築を `bpmNSlice` (rip があればそれ、無ければ
+      材料 ID から) に一本化。全 n 参照サイト (n_0 検出・励振/モード解析・
+      近軸 n_in・拡張 n2・テーパ/ツイスト補間・n_out) が共通経路を通る。
+      TPA の β は従来どおり geometry の材料 ID (rip とは独立、併用可)。
+      CPU / CUDA 両対応 (CUDA は 12.0 コンパイル検証のみ)
+  - 検証:
+    - **後方互換**: ripfile 未指定で fiber の出力が main と**ビット一致**
+      (output power 3.122506e+02、bpm_ixz.csv md5 同一スレッド数で一致)
+    - **解析解 (2D CSV)**: 放物型 GRIN `n(r) = 1.47*sqrt(1-2*0.02*(r/10um)^2)`
+      にオフセット入射 (3um) したビーム重心の自己集束ピッチが、理論値
+      Λ = 2πa/√(2Δ) = 314.16um に対しコサインフィットで 315.60um
+      (**誤差 0.46%**)。放物分布では近軸ビームが厳密に調和振動するため、
+      これは実装の直接検証になる
+    - **3D HDF5**: fiber.ofd の geometry と同じ n 値を 3D `/rip/n` で与えた
+      実行が、geometry 版と全出力 (Efinal/Ixz/power/n_out) **ビット一致**
+    - エラー処理: ファイル無し・要素数不一致で期待寸法つきメッセージを出して停止
+    - ctest 9 本通過。CI に GRIN ピッチ判定 (±2%) のスモークを追加 (Linux/macOS)

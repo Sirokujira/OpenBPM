@@ -158,6 +158,173 @@ static void bpmIdSlice(id_t *ids, int64_t iz)
     }
 }
 
+// ============================================================
+// 屈折率分布の直接入力 (ripfile = <path>)
+//   geometry プリミティブの代わりに、任意の屈折率分布を与える。
+//   上流 BPM-Matlab の「RIP を行列で与える」使い方に対応するもの。
+//   - .csv        : 2D (Ny 行 x Nx 列, 実数 n)。全スライス共通 (z 不変)
+//   - .h5 / .hdf5 : データセット /rip/n。2D (Ny x Nx) または 3D (Nz x Ny x Nx)
+//   格納は行優先 (行 iy = 0 が y 最小)。寸法はメッシュと一致すること。
+//   ripfile は屈折率のみを置き換える。TPA の β は従来どおり geometry の
+//   材料 ID から決まる (両者は併用できる)。
+// ============================================================
+static float *ripN  = NULL;   // 実数 n。2D: Nx*Ny、3D: Nx*Ny*Nz (行優先)
+static int    ripNz = 0;      // 0 = 未使用, 1 = 2D (z 不変), >1 = 3D のスライス数
+
+// 入力 .ofd のディレクトリ基準でも解決して開く
+static FILE *ripOpen(const char *path)
+{
+    FILE *fp = fopen(path, "rb");
+    if ((fp == NULL) && (path[0] != '/') && (InputPath[0] != '\0')) {
+        char buf[2048];
+        strcpy(buf, InputPath);
+        char *sl = strrchr(buf, '/');
+        char *bs = strrchr(buf, '\\');
+        char *cut = (bs > sl) ? bs : sl;
+        if (cut != NULL) {
+            cut[1] = '\0';
+            strcat(buf, path);
+            fp = fopen(buf, "rb");
+        }
+    }
+    return fp;
+}
+
+// BPM.ripfile を読み込む (未指定なら何もしない)。失敗時はメッセージを出して終了
+static void ripLoad(void)
+{
+    if (BPM.ripfile[0] == '\0') return;
+    const char *path = BPM.ripfile;
+    const char *ext = strrchr(path, '.');
+    const long NN2 = (long)Nx * Ny;
+
+    if ((ext != NULL) && ((strcmp(ext, ".h5") == 0) || (strcmp(ext, ".hdf5") == 0))) {
+        // HDF5 : /rip/n (2D Ny x Nx または 3D Nz x Ny x Nx)
+        hid_t file = H5Fopen(path, H5F_ACC_RDONLY, H5P_DEFAULT);
+        if ((file < 0) && (path[0] != '/') && (InputPath[0] != '\0')) {
+            char buf[2048];
+            strcpy(buf, InputPath);
+            char *sl = strrchr(buf, '/');
+            char *bs = strrchr(buf, '\\');
+            char *cut = (bs > sl) ? bs : sl;
+            if (cut != NULL) {
+                cut[1] = '\0';
+                strcat(buf, path);
+                file = H5Fopen(buf, H5F_ACC_RDONLY, H5P_DEFAULT);
+            }
+        }
+        if (file < 0) {
+            fprintf(stderr, "*** ripfile : cannot open \"%s\"\n", path);
+            exit(1);
+        }
+        hid_t dset = H5Dopen(file, "/rip/n", H5P_DEFAULT);
+        if (dset < 0) {
+            fprintf(stderr, "*** ripfile : dataset /rip/n not found in \"%s\"\n", path);
+            exit(1);
+        }
+        hid_t space = H5Dget_space(dset);
+        const int nd = H5Sget_simple_extent_ndims(space);
+        hsize_t dims[3] = {0, 0, 0};
+        H5Sget_simple_extent_dims(space, dims, NULL);
+        if (nd == 2) {
+            if (((int)dims[0] != Ny) || ((int)dims[1] != Nx)) {
+                fprintf(stderr, "*** ripfile : /rip/n is %dx%d, expected Ny x Nx = %dx%d\n",
+                        (int)dims[0], (int)dims[1], Ny, Nx);
+                exit(1);
+            }
+            ripNz = 1;
+        }
+        else if (nd == 3) {
+            if (((int)dims[0] != Nz) || ((int)dims[1] != Ny) || ((int)dims[2] != Nx)) {
+                fprintf(stderr, "*** ripfile : /rip/n is %dx%dx%d, expected Nz x Ny x Nx = %dx%dx%d\n",
+                        (int)dims[0], (int)dims[1], (int)dims[2], Nz, Ny, Nx);
+                exit(1);
+            }
+            ripNz = Nz;
+        }
+        else {
+            fprintf(stderr, "*** ripfile : /rip/n must be 2D or 3D (got %dD)\n", nd);
+            exit(1);
+        }
+        ripN = (float *)malloc((size_t)NN2 * ripNz * sizeof(float));
+        if (H5Dread(dset, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, ripN) < 0) {
+            fprintf(stderr, "*** ripfile : read error \"%s\"\n", path);
+            exit(1);
+        }
+        H5Sclose(space);
+        H5Dclose(dset);
+        H5Fclose(file);
+    }
+    else {
+        // CSV : Ny 行 x Nx 列 (区切りはカンマ / 空白 / タブ)。要素数の厳密一致を要求
+        FILE *fp = ripOpen(path);
+        if (fp == NULL) {
+            fprintf(stderr, "*** ripfile : cannot open \"%s\"\n", path);
+            exit(1);
+        }
+        ripN = (float *)malloc((size_t)NN2 * sizeof(float));
+        long cnt = 0;
+        char line[65536];
+        while (fgets(line, sizeof(line), fp) != NULL) {
+            if (line[0] == '#') continue;
+            char *q = line;
+            char *qe;
+            for (;;) {
+                while ((*q == ',') || (*q == ' ') || (*q == '\t')) q++;
+                const double v = strtod(q, &qe);
+                if (qe == q) break;
+                if (cnt >= NN2) {
+                    fprintf(stderr, "*** ripfile : too many values in \"%s\" (expected %ld = Nx x Ny)\n",
+                            path, NN2);
+                    exit(1);
+                }
+                ripN[cnt++] = (float)v;
+                q = qe;
+            }
+        }
+        fclose(fp);
+        if (cnt != NN2) {
+            fprintf(stderr, "*** ripfile : %ld values in \"%s\", expected %ld (Nx x Ny = %d x %d)\n",
+                    cnt, path, NN2, Nx, Ny);
+            exit(1);
+        }
+        ripNz = 1;
+    }
+}
+
+// セル中心の複素屈折率 : ripfile があればそれを、無ければ材料 ID から返す
+// (n_mat は損失を +imag で保持する規約。rip は実数 n のみ = 無損失)
+static floatcomplex bpmNPoint(const floatcomplex *n_mat, int ix, int iy, int64_t iz)
+{
+    if (ripN != NULL) {
+        const size_t off = (ripNz > 1) ? ((size_t)iz * Nx * Ny) : 0;
+        floatcomplex v = {ripN[off + ix + ((size_t)iy * Nx)], 0.0f};
+        return v;
+    }
+    return n_mat[bpmIdPoint(Xc[ix], Yc[iy], Zc[iz])];
+}
+
+// スライス iz のセル中心複素屈折率を dst[ix + Nx*iy] へ格納する
+static void bpmNSlice(floatcomplex *dst, const floatcomplex *n_mat, int64_t iz)
+{
+    if (ripN != NULL) {
+        const size_t off = (ripNz > 1) ? ((size_t)iz * Nx * Ny) : 0;
+        for (long i = 0; i < (long)Nx * Ny; i++) {
+            floatcomplex v = {ripN[off + i], 0.0f};
+            dst[i] = v;
+        }
+        return;
+    }
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            dst[ix + ((long)iy * Nx)] = n_mat[bpmIdPoint(Xc[ix], Yc[iy], Zc[iz])];
+        }
+    }
+}
+
 void solve_bpm(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
     // 関数から?(fp の入替え?)
@@ -236,11 +403,22 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     // 損失を imag(n) > 0 として格納する (applyMultiplier の exp(d*imag(n)), d < 0 の規約)
     floatcomplex *n_mat = (floatcomplex *)malloc(NMaterial * sizeof(floatcomplex));
 
-    // セル中心材料 ID のスライスバッファ (bpmIdSlice の出力先)
-    //   bpmIdIn : 入力断面 (iz_start)。テーパ/ツイストの座標変換の参照元
-    //   bpmIdZ  : 現在のスライス (伝搬ループ内で毎ステップ更新)
-    id_t *bpmIdIn = (id_t *)malloc((size_t)Nx * Ny * sizeof(id_t));
+    // セル中心のスライスバッファ
+    //   bpmNIn  : 入力断面 (iz_start) の複素屈折率。テーパ/ツイストの座標変換の参照元
+    //   bpmNZ   : 現在のスライスの複素屈折率 (拡張パス・n_out などで使用)
+    //   bpmIdZ  : 現在のスライスの材料 ID (TPA の β 参照用。ripfile とは独立)
+    floatcomplex *bpmNIn = (floatcomplex *)malloc((size_t)Nx * Ny * sizeof(floatcomplex));
+    floatcomplex *bpmNZ  = (floatcomplex *)malloc((size_t)Nx * Ny * sizeof(floatcomplex));
     id_t *bpmIdZ  = (id_t *)malloc((size_t)Nx * Ny * sizeof(id_t));
+
+    // ripfile = <path> 指定時 : 屈折率分布を読み込む (寸法はメッシュと厳密一致)
+    ripLoad();
+    if (ripN != NULL) {
+        sprintf(str, "ripfile : %s (%s)", BPM.ripfile,
+                (ripNz > 1) ? "3D, z-varying" : "2D, z-invariant");
+        if (io) fprintf(fp, "%s\n", str);
+        fprintf(stdout, "%s\n", str);
+    }
     {
         const double omega = 2 * PI * SPEED_OF_LIGHT / lambda;
         for (int64_t m = 0; m < NMaterial; m++) {
@@ -305,7 +483,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         P->n_0 = (float)BPM.n0;
     }
     else {
-        P->n_0 = CREALF(n_mat[bpmIdPoint(Xc[Nx / 2], Yc[Ny / 2], Zc[0])]);
+        P->n_0 = CREALF(bpmNPoint(n_mat, Nx / 2, Ny / 2, 0));
     }
 
     // 位相・損失係数 d = -dz*k0
@@ -466,7 +644,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             n_mat[m] = vw;
         }
         if (BPM.n0 <= 0) {
-            P->n_0 = CREALF(n_mat[bpmIdPoint(Xc[Nx / 2], Yc[Ny / 2], Zc[0])]);
+            P->n_0 = CREALF(bpmNPoint(n_mat, Nx / 2, Ny / 2, 0));
         }
         P->d  = (float)(-P->dz * k0);
         P->ax = -I * (float)(P->dz / (4 * P->dx * P->dx * k0 * P->n_0));
@@ -534,10 +712,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         const long Nm = (long)Nx * Ny;
         std::complex<double> *n2m = new std::complex<double>[Nm];
         double nmax = 0;
-        bpmIdSlice(bpmIdZ, 0);
+        bpmNSlice(bpmNZ, n_mat, 0);
         for (int iy = 0; iy < Ny; iy++) {
             for (int ix = 0; ix < Nx; ix++) {
-                const floatcomplex nmv = n_mat[bpmIdZ[(long)Nx * iy + ix]];
+                const floatcomplex nmv = bpmNZ[(long)Nx * iy + ix];
                 std::complex<double> nn(CREALF(nmv), -CIMAGF(nmv));
                 n2m[(long)Nx * iy + ix] = nn * nn;
                 if (nn.real() > nmax) nmax = nn.real();
@@ -667,10 +845,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // 入力断面の比誘電率 (実部のみ : モードは無損失断面で定義する)
         std::complex<double> *n2m = new std::complex<double>[NN2];
         double nmax = P->n_0;
-        bpmIdSlice(bpmIdZ, P->iz_start);
+        bpmNSlice(bpmNZ, n_mat, P->iz_start);
         for (int iy = 0; iy < P->Ny; iy++) {
             for (int ix = 0; ix < P->Nx; ix++) {
-                const floatcomplex nm = n_mat[bpmIdZ[ix + (long)iy * P->Nx]];
+                const floatcomplex nm = bpmNZ[ix + (long)iy * P->Nx];
                 const double nr = CREALF(nm);
                 n2m[ix + (long)iy * P->Nx] = std::complex<double>(nr * nr, 0.0);
                 if (nr > nmax) nmax = nr;
@@ -877,9 +1055,9 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             Ed[i] = std::complex<double>(CREALF(P->E1[i]), CIMAGF(P->E1[i]));
         }
 
-        // テーパ/ツイスト : 座標変換の参照元となる入力断面の材料 ID を確定する
+        // テーパ/ツイスト : 座標変換の参照元となる入力断面の屈折率を確定する
         if (xform) {
-            bpmIdSlice(bpmIdIn, P->iz_start);
+            bpmNSlice(bpmNIn, n_mat, P->iz_start);
         }
 
         for (long iz = P->iz_start; iz < P->iz_end; iz++) {
@@ -895,7 +1073,8 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             const double xfScale = 1.0 / (1.0 - (double)P->taperPerStep * izr);
             const double xfCos = cos(-(double)P->twistPerStep * izr);
             const double xfSin = sin(-(double)P->twistPerStep * izr);
-            bpmIdSlice(bpmIdZ, iz);   // 現スライスのセル中心 ID (n2 と TPA が参照)
+            bpmNSlice(bpmNZ, n_mat, iz);            // 現スライスの屈折率 (n2 が参照)
+            if (haveTpa) bpmIdSlice(bpmIdZ, iz);    // TPA の β は材料 ID から決まる
             for (int iy = 0; iy < P->Ny; iy++) {
                 for (int ix = 0; ix < P->Nx; ix++) {
                     long index = (long)(P->Nx * iy) + ix;
@@ -914,17 +1093,17 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                         const int j0 = (int)floor(fy);
                         const double tx = fx - i0;
                         const double ty = fy - j0;
-                        const floatcomplex n00 = n_mat[bpmIdIn[i0     + ((long)j0       * P->Nx)]];
-                        const floatcomplex n10 = n_mat[bpmIdIn[i0 + 1 + ((long)j0       * P->Nx)]];
-                        const floatcomplex n01 = n_mat[bpmIdIn[i0     + ((long)(j0 + 1) * P->Nx)]];
-                        const floatcomplex n11 = n_mat[bpmIdIn[i0 + 1 + ((long)(j0 + 1) * P->Nx)]];
+                        const floatcomplex n00 = bpmNIn[i0     + ((long)j0       * P->Nx)];
+                        const floatcomplex n10 = bpmNIn[i0 + 1 + ((long)j0       * P->Nx)];
+                        const floatcomplex n01 = bpmNIn[i0     + ((long)(j0 + 1) * P->Nx)];
+                        const floatcomplex n11 = bpmNIn[i0 + 1 + ((long)(j0 + 1) * P->Nx)];
                         nr    = ((1 - tx) * (1 - ty) * CREALF(n00)) + (tx * (1 - ty) * CREALF(n10))
                               + ((1 - tx) * ty * CREALF(n01))       + (tx * ty * CREALF(n11));
                         nimag = ((1 - tx) * (1 - ty) * CIMAGF(n00)) + (tx * (1 - ty) * CIMAGF(n10))
                               + ((1 - tx) * ty * CIMAGF(n01))       + (tx * ty * CIMAGF(n11));
                     }
                     else {
-                        const floatcomplex nm = n_mat[bpmIdZ[index]];
+                        const floatcomplex nm = bpmNZ[index];
                         nr    = CREALF(nm);
                         nimag = CIMAGF(nm);
                     }
@@ -1009,11 +1188,11 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             power += std::norm(Ed[i]);
         }
         P->precisePower = power;
-        bpmIdSlice(bpmIdZ, P->iz_end - 1);
+        bpmNSlice(bpmNZ, n_mat, P->iz_end - 1);
         for (int iy = 0; iy < P->Ny; iy++) {
             for (int ix = 0; ix < P->Nx; ix++) {
                 long index = (long)(P->Nx * iy) + ix;
-                P->n_out[index] = n_mat[bpmIdZ[index]];
+                P->n_out[index] = bpmNZ[index];
             }
         }
         delete[] Ed;
@@ -1030,15 +1209,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // このスライスの複素屈折率分布を材料 ID から設定 (虚部 = 導電率による吸収)
         // テーパ/ツイスト指定時は入力断面を渡し、z 変化はカーネル側の座標変換に任せる
         const int64_t iz_n = xform ? P->iz_start : iz;
-        bpmIdSlice(bpmIdZ, iz_n);
-        for (int iy = 0; iy < P->Ny; iy++)
-        {
-            for (int ix = 0; ix < P->Nx; ix++)
-            {
-                long index = (long)(P->Nx * iy) + ix;
-                P->n_in[index] = n_mat[bpmIdZ[index]];
-            }
-        }
+        bpmNSlice(P->n_in, n_mat, iz_n);
 
         // Douglas-Gunn ADI 法による 1 ステップ伝搬
         #ifdef _OPENMP
@@ -1059,7 +1230,7 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
         // TPA 減衰を打ち消さないよう、電力簿記 precisePower も同率で減らす。
         if (haveTpa) {
             updatePrecisePower(P);  // 係留中の precisePowerDiff を先に確定する
-            if (xform) bpmIdSlice(bpmIdZ, iz);   // TPA は実スライスの材料を参照する
+            bpmIdSlice(bpmIdZ, iz);   // TPA の β は実スライスの材料 ID から決まる
             double pb = 0, pa = 0;
             for (int iy = 0; iy < P->Ny; iy++) {
                 for (int ix = 0; ix < P->Nx; ix++) {
@@ -1687,8 +1858,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
     free(wlTrans);
     free(n_mat);
     free(tpa_mat);
-    free(bpmIdIn);
+    free(bpmNIn);
+    free(bpmNZ);
     free(bpmIdZ);
+    if (ripN != NULL) { free(ripN); ripN = NULL; ripNz = 0; }
     if (E0 != NULL) free(E0);
     if (sweepPin != NULL) free(sweepPin);
     if (sweepPout != NULL) free(sweepPout);

@@ -84,6 +84,7 @@ int input_data(FILE *fp)
 	BPM.symx = 0;     // 0 = 対称境界なし
 	BPM.symy = 0;
 	BPM.launchMode = -1;  // -1 = ガウシアン励振 (既定)
+	BPM.ripfile[0] = '\0';   // "" = geometry から屈折率を構築 (従来動作)
 	BPM.launchNModes = 0; // 0 = ガウシアン励振
 	BPM.wlsweep = 0;      // 0 = 先頭波長のみ (既定)
 
@@ -545,6 +546,19 @@ int input_data(FILE *fp)
 		else if (!strcmp(strkey, "twist")) {
 			// twist = <rate[deg/m]> : 導波路のツイスト率 (座標系を z に沿って回転)
 			BPM.twist = atof(token[2]);
+		}
+		else if (!strcmp(strkey, "ripfile")) {
+			// ripfile = <path> : 屈折率分布の直接入力 (geometry の代わりに使用)。
+			//   .csv          : 2D (Ny 行 x Nx 列, 実数 n)。全スライス共通 (z 不変)
+			//   .h5 / .hdf5   : データセット /rip/n。2D (Ny x Nx) または
+			//                   3D (Nz x Ny x Nx) の実数 n
+			// 相対パスは入力 .ofd のディレクトリ基準でも解決される。
+			// 読み込みと寸法検証はソルバー側 (solve_bpm) で行う。
+			if (strlen(token[2]) >= sizeof(BPM.ripfile)) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+			strcpy(BPM.ripfile, token[2]);
 		}
 		else if (!strcmp(strkey, "symmetry")) {
 			// symmetry = <x|y|xy> [sym|anti] : 対称境界 (計算領域を 1/2〜1/4 に削減)
