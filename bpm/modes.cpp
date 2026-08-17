@@ -63,6 +63,30 @@ static double rayleigh_v(const wabpm_params *W, const cplx *E, const cplx *n2, c
 	return (W->n0 * W->n0) + (mu / (W->k0 * W->k0));
 }
 
+// 導波判定のしきい値 (= クラッド相当の neff^2) を n^2 スライスの境界リングから求める。
+// 導波モードは境界へ向かって減衰する必要があるため、境界セルの Re(n^2) の最大値を
+// しきい値とする (それ以下の neff は放射状態)。参照屈折率 W->n0 を使わないのは、
+// n0 は位相基準の選択にすぎず、GRIN のように「n0 = 軸上最大値」を選ぶと
+// 全モードが誤って棄却されるため (クラッド一定のファイバでは n0 = クラッドと
+// 一致していたので顕在化しなかった)。
+// 対称境界 (symx/symy) の鏡像面 (ix = 0 / iy = 0) は物理境界ではないため除外する。
+double wabpm_guided_threshold(const wabpm_params *W, const cplx *n2)
+{
+	const long Nx = W->Nx;
+	const long Ny = W->Ny;
+	double v0 = 0.0;
+	for (long iy = 0; iy < Ny; iy++) {
+		for (long ix = 0; ix < Nx; ix++) {
+			const int on_x = (ix == Nx - 1) || ((ix == 0) && !W->symx);
+			const int on_y = (iy == Ny - 1) || ((iy == 0) && !W->symy);
+			if (!on_x && !on_y) continue;
+			const double v = n2[ix + iy * Nx].real();
+			if (v > v0) v0 = v;
+		}
+	}
+	return v0;
+}
+
 int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
                      int nModes, int maxIter, double tol,
                      cplx *modes, double *neff)
@@ -96,7 +120,8 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 		deflate(E, modes, m, N);
 		normalize(E, N);
 
-		const double v0 = W->n0 * W->n0;   // 導波条件のしきい値 (neff > n0)
+		// 導波条件のしきい値 : 境界リングの n^2 (neff がこれを超えるモードのみ導波)
+		const double v0 = wabpm_guided_threshold(W, n2);
 		double v_prev = 0.0;
 		int converged = 0;
 		int unguided = 0;

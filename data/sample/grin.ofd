@@ -12,6 +12,12 @@
 #      最初の符号反転 (1/4 周期) は Lambda/4 = 78.5 um に現れる
 #   3. 滑らかな分布のため、階段近似 (fiber_gi_mmf.ofd の 8 層) より
 #      理論値に近いピッチが得られる
+#   4. 放物分布の基本モード (LG00) の解析解:
+#      neff = n0 - sqrt(2*Delta)/(a*k0) = 1.47 - 0.2/(10e-6*k0) = 1.465066。
+#      modes = 1 の出力 neff = 1.465062 (誤差 4e-6)。
+#      注: n0 = 軸上最大屈折率のため、導波判定を「neff > n0」で行うと
+#      モードが見つからない。判定は境界リングの屈折率と比較する
+#      (bpm/modes.cpp の wabpm_guided_threshold)
 OpenBPM 2 2
 title = GRIN lens via ripfile (BPM sample)
 
@@ -30,6 +36,9 @@ beam = 4e-6
 
 # refindex = <n0> : GRIN 軸上の屈折率
 refindex = 1.47
+
+# modes = <n> : 基本モード解析 (LG00 解析解 neff = 1.465066 との比較用)
+modes = 1
 
 frequency2 = 1.93414489e14 1.93414489e14 0
 
