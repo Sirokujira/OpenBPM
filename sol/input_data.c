@@ -85,6 +85,8 @@ int input_data(FILE *fp)
 	BPM.symy = 0;
 	BPM.launchMode = -1;  // -1 = ガウシアン励振 (既定)
 	BPM.ripfile[0] = '\0';   // "" = geometry から屈折率を構築 (従来動作)
+	BPM.pmlw = 0;       // 0 = PML 無効 (従来の端部吸収体を使用)
+	BPM.pmlR0 = 1e-20;  // PML の目標往復振幅反射率 (かすめ入射 kx = k0*n0 基準)
 	BPM.launchNModes = 0; // 0 = ガウシアン励振
 	BPM.wlsweep = 0;      // 0 = 先頭波長のみ (既定)
 
@@ -559,6 +561,20 @@ int input_data(FILE *fp)
 				return 1;
 			}
 			strcpy(BPM.ripfile, token[2]);
+		}
+		else if (!strcmp(strkey, "pml")) {
+			// pml = <width[m]> [<R0>] : 横方向境界の PML (複素座標伸長)
+			//   width : PML 層の厚さ [m] (領域の内側に確保する。4 辺に適用)
+			//   R0    : 目標往復振幅反射率 (既定 1e-20)。かすめ入射
+			//           (横方向波数 kx = k0*n0) を基準に減衰係数を決める:
+			//             sigma_max = -(m+1)*ln(R0) / (2*k0*n0*width),  m = 3
+			// 指定時は従来の端部吸収体 (multiplier) を無効化する。
+			BPM.pmlw = atof(token[2]);
+			if (ntoken > 3) BPM.pmlR0 = atof(token[3]);
+			if ((BPM.pmlw <= 0) || (BPM.pmlR0 <= 0) || (BPM.pmlR0 >= 1)) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
 		}
 		else if (!strcmp(strkey, "symmetry")) {
 			// symmetry = <x|y|xy> [sym|anti] : 対称境界 (計算領域を 1/2〜1/4 に削減)

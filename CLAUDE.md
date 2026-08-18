@@ -18,7 +18,7 @@ OpenFDTD-X (GUI) から QProcess で起動される処理カーネルでもあ�
 # 実行ファイルは bin/ に出力 (obpm, obpm_post)
 cmake -S . -B build -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # 解析解との比較検証 (9本、要 h5py/numpy)
+ctest --test-dir build --output-on-failure   # 解析解との比較検証 (10本、要 h5py/numpy)
 ```
 
 ```sh
@@ -59,7 +59,7 @@ python3 tools/plot_ixz.py time_series_data.h5
 | `include/` | ヘッダ。グローバル状態は `obpm.h` (EXTERN パターン)、BPM API は `include/bpm/` |
 | `post/postbpm.c` | obpm_post の BPM 可視化 (/field 等高線 + /trace 折れ線グラフ) |
 | `mpi/`, `cuda_mpi/` | MPI 版 (FDTD のみ、BPM 未対応) |
-| `tests/` | ctest 9 本 (単体: wabpm/modes/allset/fdbpm、結合: ONN 活性化 / モードビート / 波長掃引) |
+| `tests/` | ctest 10 本 (単体: wabpm/modes/allset/fdbpm/pml、結合: ONN 活性化 / モードビート / 波長掃引) |
 | `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証スクリプト (`check_activation.sh`) |
 | `data/` | OpenFDTD 形式 (.ofd) のサンプル入力。理論値との比較ポイントをコメントに記載 |
 | `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |

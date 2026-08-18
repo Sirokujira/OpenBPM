@@ -1,0 +1,46 @@
+# OpenBPM sample : PML 吸収境界 (複素座標伸長) の検証
+#
+# 15 度傾けたガウシアンビームを側壁へ入射させ、境界での反射を測る。
+# 従来の端部吸収体 (BPM-MATLAB 由来, 領域の 5% 幅・alpha = 3e14) では
+# 入射電力の 7 割以上が反射して領域内へ戻るが、PML では反射が
+# 1e-7 以下に抑えられる。
+#
+# 期待される物理 (検証ポイント):
+#   1. ビーム重心は <x>(z) = z*sin(theta) で壁へ向かって進む
+#      (近軸 BPM の walk-off。離散分散 sin(kx*dx)/(kx*dx) = 0.976 の分だけ遅い)
+#   2. z = 80um 付近でビームが壁に達し PML に吸収される。出口 (z = 200um) の
+#      電力は入射比 P/P0 = 7.67e-05 (output power = 3.085e-02)。
+#      pml 指定を外すと 0.982 (output power = 3.949e+02) = ほぼ全反射
+#   3. 壁の無い広領域 (x = ±80um) の参照計算と内部窓の残留電力を比べると
+#      差は入射電力の 1e-7 以下 (= 境界反射率)
+#   4. PML 幅 W と目標反射率 R0 の関係は
+#        R(theta) = R0^(2*sin(theta))   (往復電力比, 連続体の理論)
+#      で、R0 を下げると離散化由来の反射床 (~1e-7) まで単調に下がる
+OpenBPM 2 2
+title = PML boundary test (tilted gaussian)
+
+xmesh = -20e-6 160 20e-6
+ymesh = -20e-6 160 20e-6
+zmesh = 0 400 200e-6
+
+material = 1 2.085136 0 1 0
+geometry = 2 1 -20e-6 20e-6 -20e-6 20e-6 0 200e-6
+
+feed = Z 0 0 0 1 0 0
+beam = 4e-6
+
+# beamtilt = <tiltx[deg]> <tilty[deg]> : 入射ビームの傾き
+beamtilt = 15 0
+
+# pml = <width[m]> [<R0>] : 横方向境界の PML (複素座標伸長)
+#   width : 層の厚さ [m] (ここでは 4um = 16 セル)
+#   R0    : 目標往復振幅反射率 (既定 1e-20。かすめ入射基準)
+pml = 4e-6
+
+refindex = 1.444
+frequency2 = 1.93414489e14 1.93414489e14 0
+
+solver = 100 10 1e-3
+abc = 0
+
+end
