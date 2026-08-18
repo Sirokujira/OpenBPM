@@ -653,3 +653,40 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
       実行が、geometry 版と全出力 (Efinal/Ixz/power/n_out) **ビット一致**
     - エラー処理: ファイル無し・要素数不一致で期待寸法つきメッセージを出して停止
     - ctest 9 本通過。CI に GRIN ピッチ判定 (±2%) のスモークを追加 (Linux/macOS)
+
+# 第 12 回: 物理バグ — モードソルバの導波判定が参照屈折率 n0 と比較していた
+
+- [x] **GRIN (n0 = 軸上最大屈折率) でモードが 1 本も見つからない** ✅ 対応済み
+  - 場所: `bpm/modes.cpp` / `include/bpm/wabpm.h` / `sol/solve_bpm.cpp` /
+    `cuda/solve_bpm.cu`
+  - 現状 (対応前): 導波判定のしきい値が `v0 = n0^2` (参照屈折率)。n0 は
+    位相基準にすぎず、GRIN のように n0 = 軸上最大値と置く入力では
+    neff < n0 が常に成り立つため、導波構造があっても
+    「modes : 0 / 1 converged」となった (grin.ofd + modes = 1 で確認)。
+    solve_bpm 側の励振ゲート `if (nmax > n0)` も同じ誤りで、
+    launch = mode 自体がスキップされた。
+  - 対応内容: しきい値を「計算領域の境界リング上の max Re(n^2)」に変更
+    (`wabpm_guided_threshold` を bpm/modes.cpp に新設し公開)。物理的には
+    「クラッド (境界) より速い波は放射モード」という導波条件そのもの。
+    対称境界 (symx/symy) の鏡像エッジ (ix=0 / iy=0) はリングから除外。
+    虚軸ステップ幅 dz の見積り (mu_max) も同じしきい値を使う。
+- [x] **launch = mode ブロックの Wm.symx / Wm.symy が未初期化 (UB)** ✅ 対応済み
+  - 場所: `sol/solve_bpm.cpp` / `cuda/solve_bpm.cu` (launch = mode ブロック)
+  - 現状 (対応前): モード解析 (`modes =`) 側は初期化していたが、
+    launch = mode 側の `wabpm_params Wm` はスタック値のまま
+    `wabpm_find_modes` に渡していた (対称境界と組み合わせると不定動作)。
+  - 対応内容: 両ファイルの launch ブロックで `Wm.symx = BPM.symx` /
+    `Wm.symy = BPM.symy` を明示。CPU / CUDA 鏡写し
+    (CUDA は 12.0 コンパイル検証のみ、実機未検証)。
+  - 検証:
+    - **解析解 (GRIN LG00)**: 放物分布の基本モード neff = n0 − √(2Δ)/(a k0)
+      = 1.465066 に対し、grin.ofd + modes = 1 で **neff = 1.465062
+      (誤差 4e-6)**。対応前は 0 本 (検出不能) だった
+    - **回帰**: fiber 3.122506e+02 不変 / fiber_modes.ofd neff 1.447135・
+      eta_1 0.999265・output power 3.100507e+02 不変 / ctest 9 本通過
+      (mode_beat・wlsweep_check 含む)
+    - fiber_mode.ofd (launch = mode) の neff は 1.447167 → 1.447135 に変化
+      (dz の見積り変更による収束点の差)。厳密解 1.447167 との誤差は
+      3.2e-5 で許容 (±5e-4) 内。modes = 経路の値と一致するようになった
+    - CI: GRIN スモークに neff 判定 (解析解 1.465066 ± 5e-4) を追加。
+      判定退行 (n0 比較に戻ると neff 行が消える) を検知する

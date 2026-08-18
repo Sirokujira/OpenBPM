@@ -157,6 +157,9 @@ jobs:
       # 屈折率分布の直接入力 (ripfile) : 放物型 GRIN の自己集束ピッチを
       # 理論値 Lambda = 2*pi*a/sqrt(2*Delta) = 314.16 um と比較する (±2%)。
       # 実測 0.46% (離散化 dz=0.5um とフィット分解能ぶんのマージンを含む)
+      # あわせて基本モード (LG00) の neff を解析解 1.465066 と比較する (±5e-4)。
+      # n0 = 軸上最大屈折率のため、導波判定を neff > n0 で行う退行があると
+      # 「modes : 0 / 1」となり neff 行が消えるのでここで検知できる
       - name: Smoke test — GRIN via ripfile (self-focusing pitch)
         run: |
           mkdir -p /tmp/smoke-grin && cd /tmp/smoke-grin
@@ -174,6 +177,10 @@ jobs:
           assert err < 0.02, f"pitch {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err:.3f})"
           print(f"GRIN pitch OK: {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err*100:.2f}%)")
           EOF
+          awk '/mode 1 : neff/ { err = $NF - 1.465066; if (err < 0) err = -err
+               if (err > 5e-4) { print "FAIL: neff " $NF " != 1.465066 (err " err ")"; exit 1 }
+               print "GRIN mode OK: neff = " $NF; ok = 1 }
+               END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
 
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)
@@ -331,6 +338,9 @@ jobs:
       # 屈折率分布の直接入力 (ripfile) : 放物型 GRIN の自己集束ピッチを
       # 理論値 Lambda = 2*pi*a/sqrt(2*Delta) = 314.16 um と比較する (±2%)。
       # 実測 0.46% (離散化 dz=0.5um とフィット分解能ぶんのマージンを含む)
+      # あわせて基本モード (LG00) の neff を解析解 1.465066 と比較する (±5e-4)。
+      # n0 = 軸上最大屈折率のため、導波判定を neff > n0 で行う退行があると
+      # 「modes : 0 / 1」となり neff 行が消えるのでここで検知できる
       - name: Smoke test — GRIN via ripfile (self-focusing pitch)
         run: |
           mkdir -p /tmp/smoke-grin && cd /tmp/smoke-grin
@@ -348,6 +358,10 @@ jobs:
           assert err < 0.02, f"pitch {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err:.3f})"
           print(f"GRIN pitch OK: {best*1e6:.2f} um vs theory {L_th*1e6:.2f} um (err {err*100:.2f}%)")
           EOF
+          awk '/mode 1 : neff/ { err = $NF - 1.465066; if (err < 0) err = -err
+               if (err > 5e-4) { print "FAIL: neff " $NF " != 1.465066 (err " err ")"; exit 1 }
+               print "GRIN mode OK: neff = " $NF; ok = 1 }
+               END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
 
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)

@@ -49,6 +49,11 @@ int wabpm_find_modes(const wabpm_params *W, const std::complex<double> *n2,
                      int nModes, int maxIter, double tol,
                      std::complex<double> *modes, double *neff);
 
+// 導波判定のしきい値 (= 境界リングの Re(n^2) の最大値)。
+// wabpm_find_modes が内部で使用するものと同じ値。呼び出し側で
+// 「導波構造があるか」の事前判定や虚軸ステップ幅の選定に使える。
+double wabpm_guided_threshold(const wabpm_params *W, const std::complex<double> *n2);
+
 #endif
 
 // ---------------------------------------------------------------

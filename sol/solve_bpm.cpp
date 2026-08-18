@@ -722,23 +722,30 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
             }
         }
         int launched = 0;
-        if (nmax > P->n_0) {
+        wabpm_params Wm;
+        Wm.Nx = Nx;
+        Wm.Ny = Ny;
+        Wm.dx = Dx;
+        Wm.dy = Dy;
+        Wm.k0 = k0;
+        Wm.n0 = P->n_0;
+        Wm.wideangle = 0;
+        Wm.pol = BPM.pol;
+        Wm.symx = BPM.symx;   // 対称境界はモード解析にも適用する (未設定だと未初期化)
+        Wm.symy = BPM.symy;
+        // 導波判定のしきい値 : 境界リングの n^2 (bpm/modes.cpp と同じ値)。
+        // 参照屈折率 n0 と比較すると、GRIN のように n0 = 軸上最大値の入力で
+        // 導波構造があるのに「モード無し」と誤判定する
+        const double nthr2 = wabpm_guided_threshold(&Wm, n2m);
+        if (((double)nmax * nmax) > nthr2) {
             /* 重ね合わせる最大モード番号まで求める */
             int m = 0;
             for (int n = 0; n < BPM.launchNModes; n++) {
                 if (BPM.launchIdx[n] > m) m = BPM.launchIdx[n];
             }
-            wabpm_params Wm;
-            Wm.Nx = Nx;
-            Wm.Ny = Ny;
-            Wm.dx = Dx;
-            Wm.dy = Dy;
-            Wm.k0 = k0;
-            Wm.n0 = P->n_0;
-            Wm.wideangle = 0;
-            Wm.pol = BPM.pol;
-            // a*mu_max ~ 0.5 となる虚軸ステップ幅 (tests/test_modes.cpp と同じ)
-            const double mu_max = k0 * k0 * ((nmax * nmax) - ((double)P->n_0 * P->n_0));
+            // a*mu_max ~ 0.5 となる虚軸ステップ幅 (tests/test_modes.cpp と同じ)。
+            // スペクトル幅は「最大屈折率 - 導波しきい値」で見積もる
+            const double mu_max = k0 * k0 * (((double)nmax * nmax) - nthr2);
             Wm.dz = 2 * k0 * P->n_0 / mu_max;
             std::complex<double> *modes = new std::complex<double>[(size_t)(m + 1) * Nm];
             double *neff = new double[m + 1];
@@ -854,8 +861,10 @@ void solve_bpm(int io, double *tdft, FILE *fp) {
                 if (nr > nmax) nmax = nr;
             }
         }
-        // 虚軸ステップ幅 : 最大固有値 mu_max に対し a*mu_max ~ 0.5 となるよう選ぶ
-        const double mu_max = k0 * k0 * (nmax * nmax - P->n_0 * P->n_0);
+        // 虚軸ステップ幅 : 最大固有値 mu_max に対し a*mu_max ~ 0.5 となるよう選ぶ。
+        // スペクトル幅は「最大屈折率 - 導波しきい値 (境界リングの n)」で見積もる
+        const double nthr2m = wabpm_guided_threshold(&Wm, n2m);
+        const double mu_max = k0 * k0 * (nmax * nmax - nthr2m);
         Wm.dz = (mu_max > 0) ? (2.0 * k0 * P->n_0 / mu_max) : (10.0 * P->dx);
 
         modeFields = new std::complex<double>[(size_t)BPM.nmodes * NN2];
