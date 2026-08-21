@@ -117,7 +117,8 @@ obpm_post の入力) + `activation_curve.csv` / `spectrum.csv` (掃引指定時)
 
 - 実装漏れ対応は `docs/implementation-checklist.md` を起点にし、対応後は
   同ファイルの状態 (✅/現状/検証内容) を更新する。
-- GPU 実機はこの開発環境にないため、CUDA 変更は「CUDA 12.0 でのコンパイル検証」まで。
-  その旨をコミット/チェックリストに明記する。
+- GPU 実機は CI の開発環境にないため、CUDA 変更は「CUDA 12.0 でのコンパイル検証」まで。
+  その旨をコミット/チェックリストに明記する (2026-08-21 に Windows + CUDA 13.1 +
+  RTX 3060 で `obpm_cuda` の実行を確認した実績はあるが、CI では通らない)。
 - 規約の詳細は `.claude/rules/` にある (physics-validation / keyword-wiring /
   bpm-physics / cuda / testing / portability)。本ファイルは同内容の要約である。
