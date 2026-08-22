@@ -41,9 +41,14 @@ python3 tools/plot_ixz.py time_series_data.h5
 ```
 
 - CUDA 版: `-DWITH_CUDA=ON` → `obpm_cuda` (nvcc 必要。GPU 実機がない環境では
-  コンパイル/リンク確認まで)
+  コンパイル/リンク確認まで。2026-08-21 に Windows + CUDA 13.1 + RTX 3060 で
+  fiber.ofd の実行を確認)
 - MPI 版: `-DWITH_MPI=ON` (要 libopenmpi-dev + **libhdf5-openmpi-dev**)。
-  `obpm_mpi` は **FDTD ソルバーであり BPM ではない**
+  `obpm_mpi` / `obpm_cuda_mpi` は **FDTD ソルバーであり BPM ではない**。
+  **2 ランク以上では HDF5 (`time_series_data.h5`) を書かない** — 集団操作を
+  rank 0 だけが呼ぶ構造でデッドロックしていたため、直すまでは理由を出して
+  HDF5 出力だけを止めている (`.log` / `.out` は出る)。CUDA 13 では
+  `-DCMAKE_CUDA_ARCHITECTURES=<実機>` を渡す (既定は nvcc 13 以降 75)
 
 ## アーキテクチャ地図
 
@@ -163,8 +168,9 @@ python3 tools/plot_ixz.py time_series_data.h5
 
 - 実装漏れ対応は `docs/implementation-checklist.md` を起点にし、対応後は
   同ファイルの状態 (✅/現状/検証内容) を更新する。
-- GPU 実機はこの開発環境にないため、CUDA 変更は「CUDA 12.0 でのコンパイル検証」まで。
-  その旨をコミット/チェックリストに明記する。
+- GPU 実機は CI の開発環境にないため、CUDA 変更は「CUDA 12.0 でのコンパイル検証」まで。
+  その旨をコミット/チェックリストに明記する (2026-08-21 に Windows + CUDA 13.1 +
+  RTX 3060 で `obpm_cuda` の実行を確認した実績はあるが、CI では通らない)。
 - コミットメッセージは日本語で「何を・なぜ」を要約し、検証結果 (テスト通過・
   解析解との誤差) を本文に含める。
 
