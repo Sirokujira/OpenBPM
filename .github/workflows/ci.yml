@@ -182,6 +182,22 @@ jobs:
                print "GRIN mode OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
 
+      # PML 吸収境界 : 15 度傾けたビームを側壁へ入射させ、出口電力で判定する。
+      # PML が効いていれば全電力が吸収されて output power = 3.085e-02
+      # (入射比 7.67e-05)、効かず反射すると 3.949e+02 (0.982) に戻るため
+      # しきい値 0.1 で明確に切り分けられる (実測比 3.2 倍のマージン)。
+      - name: Smoke test — PML absorbing boundary
+        run: |
+          mkdir -p /tmp/smoke-pml && cp data/sample/pml_tilt.ofd /tmp/smoke-pml/
+          cd /tmp/smoke-pml
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out pml_tilt.ofd
+          grep -q "normal end" obpm.log
+          grep -q "pml : width = 4.000e-06" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p > 0.1) { print "FAIL: output power " p " > 0.1 (PML not absorbing?)"; exit 1 }
+               print "PML OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)
       - name: Smoke test — taper / twist (coordinate transform)
@@ -363,6 +379,22 @@ jobs:
                print "GRIN mode OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
 
+      # PML 吸収境界 : 15 度傾けたビームを側壁へ入射させ、出口電力で判定する。
+      # PML が効いていれば全電力が吸収されて output power = 3.085e-02
+      # (入射比 7.67e-05)、効かず反射すると 3.949e+02 (0.982) に戻るため
+      # しきい値 0.1 で明確に切り分けられる (実測比 3.2 倍のマージン)。
+      - name: Smoke test — PML absorbing boundary
+        run: |
+          mkdir -p /tmp/smoke-pml && cp data/sample/pml_tilt.ofd /tmp/smoke-pml/
+          cd /tmp/smoke-pml
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out pml_tilt.ofd
+          grep -q "normal end" obpm.log
+          grep -q "pml : width = 4.000e-06" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p > 0.1) { print "FAIL: output power " p " > 0.1 (PML not absorbing?)"; exit 1 }
+               print "PML OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+
       # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
       # (入射ガウシアン w0=4um の生パワー 225.8 に対し P/P0 = 0.9985)
       - name: Smoke test — taper / twist (coordinate transform)
@@ -516,6 +548,16 @@ jobs:
                if (e < 0.99) { print "FAIL: eta_1 " e " < 0.99 (mode-matched excitation)"; exit 1 }
                print "mode overlap OK: eta_1 = " e; ok = 1 }
                END { if (!ok) { print "FAIL: overlap line not found"; exit 1 } }' obpm.log
+          # PML 吸収境界 : 傾けたビームが吸収されること (反射すると 3.949e+02)
+          mkdir -p ../smoke-pml && cd ../smoke-pml
+          cp ../data/sample/pml_tilt.ofd .
+          ../bin/obpm.exe -n 2 -no-fdtd-out pml_tilt.ofd
+          grep -q "normal end" obpm.log
+          grep -q "pml : width = 4.000e-06" obpm.log
+          awk '/output power/ { p = $(NF-1) + 0
+               if (p > 0.1) { print "FAIL: output power " p " > 0.1 (PML not absorbing?)"; exit 1 }
+               print "PML OK: output power = " p; ok = 1 }
+               END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
           # テーパ/ツイスト (座標変換) : 合計回転角のログと断熱的な電力保存を判定する
           mkdir -p ../smoke-tt && cd ../smoke-tt
           cp ../data/sample/taper_twist.ofd .

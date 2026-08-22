@@ -336,6 +336,7 @@ main に新規変更なし、マーカー走査 0 件。E2E 検証 (ONN/回折/�
 | テスト | 対象 | 検証内容 |
 |---|---|---|
 | `test_wabpm` | `bpm/wabpm.cpp` | 回折 (近軸/広角)・エネルギー保存・吸収減衰・曲げ偏向・半ベクトル整合 |
+| `test_pml` | `bpm/wabpm.cpp` (PML) | 伸長なしのビット一致・境界反射 (壁なし参照比) ・理論式 R0^(2 sinθ) との一致 |
 | `test_modes` | `bpm/modes.cpp` | LP01/LP11 実効屈折率 (分散方程式の厳密解と比較)・直交性 |
 | `test_allset` | `include/bpm/allset.hpp` | findModes / modeSuperposition / offsetField / tiltField |
 | `test_fdbpm` | `bpm/FDBPMpropagator.c` | スカラー近軸カーネルの回折・エネルギー保存・吸収・ビーム中心保持 |
@@ -690,3 +691,49 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
       3.2e-5 で許容 (±5e-4) 内。modes = 経路の値と一致するようになった
     - CI: GRIN スモークに neff 判定 (解析解 1.465066 ± 5e-4) を追加。
       判定退行 (n0 比較に戻ると neff 行が消える) を検知する
+
+# 第 13 回: 機能追加 — PML 吸収境界 (複素座標伸長)
+
+- [x] **横方向境界の反射が非常に大きい (端部吸収体がほぼ効いていない)** ✅ 対応済み
+  - 場所: `include/obpm.h` / `sol/input_data.c` / `bpm/FDBPMpropagator.c(.cu)` /
+    `bpm/wabpm.cpp(.cu)` / `include/bpm/wabpm.h` / `include/bpm/bpm_prototype.h` /
+    `sol/solve_bpm.cpp` / `cuda/solve_bpm.cu` / `tests/test_pml.cpp` /
+    `data/sample/pml_tilt.ofd`
+  - 現状 (対応前): 境界処理は BPM-Matlab 由来の振幅 multiplier
+    `exp(-dz*dist^2*alpha)` のみ (alpha = 3e14 固定・幅は領域の 5% 固定)。
+    µm スケールの領域では最外セルでも 1 ステップあたり exp(-6e-4) にしかならず、
+    **実質的に吸収していない**。15° 傾けたガウシアンを側壁へ入射させると
+    重心が壁で折り返し、入射電力の **73%** が領域内へ反射して戻る
+    (壁の無い広領域の参照計算と内部窓の残留電力を比較して定量化)。
+    ユーザーが強度を調整する手段も無かった。
+  - 対応内容: `pml = <width[m]> [<R0>]` を追加 (省略時は従来動作)。
+    横方向の微分を `∂/∂x -> (1/s(x))∂/∂x`、`s(x) = 1 - i*sigma(x)` と伸長する。
+    位相規約が `exp(-i k z)` のため外向き波は層内で `exp(-|kx|∫sigma dx)` で減衰し、
+    屈折率を変えないので垂直入射でも不整合反射が生じない。
+    `sigma(d) = sigma_max (d/W)^3`、`sigma_max = -(m+1)ln(R0)/(2 k0 n0 W)` (m = 3)。
+    - 実装は面ごとの係数 `gm[i] = 1/(s(cent_i) s(face_{i-1/2}))`,
+      `gp[i] = 1/(s(cent_i) s(face_{i+1/2}))` を横方向ラプラシアンの各面に掛ける形。
+      近軸カーネル (float) は `P->pml*` 配列、拡張カーネル (double) は
+      `wabpm_params::g*` 経由。**未指定時は NULL でスカラー係数のまま**
+    - 近軸カーネルは毎ステップ `fieldCorrection = sqrt(precisePower/EfieldPower)` で
+      場を再正規化するため、そのままでは PML の吸収が打ち消される。
+      PML 使用時は `precisePower` を実際の場の電力に同期させる (TPA と同じ手当)
+    - PML 指定時は従来の振幅吸収体を無効化 (multiplier = 1)
+    - 対称境界の鏡像面側には PML を置かない
+    - CPU の近軸/拡張 **両経路** と CUDA 版 (両カーネル + デバイス転送) に実装
+  - 検証:
+    - **後方互換**: `pml` 未指定で `data/` + `data/sample/` の**全 23 サンプル**の
+      HDF5 全データセットが変更前と**数値完全一致** (最大絶対差 0)
+    - **境界反射 (壁なし参照との比較)**: 15° 入射で
+      従来吸収体 = 入射電力の **73%** が反射、`pml = 4e-6` = **9.5e-08** (近軸)、
+      **1.6e-09** (広角パス)。出口電力比も 0.982 → 7.67e-05
+    - **理論との一致**: 往復電力反射率は連続体の理論式 `R = R0^(2 sinθ)` に沿って
+      下がる (R0 = 1e-4 で実測 9.7e-3 / 理論 8.5e-3)。R0 = 1e-20 付近で
+      離散化由来の反射床 (~1e-7) に飽和する (PML 一般の性質)
+    - **単体テスト** `tests/test_pml.cpp` (ctest `pml_unit`) を追加:
+      伸長なし (sigma = 0) のビット一致 / 反射 5.95e-09 (Dirichlet 境界は 0.752) /
+      理論式との比 0.64 (許容 1/3〜3)
+    - 併用確認: `symmetry` (鏡像面に PML を置かない) ・`taper`/`twist` ・
+      `modes` (モードソルバは PML 非適用、neff 不変) で正常終了
+    - ctest 10 本通過。CI に PML スモーク (出口電力 < 0.1) を 3 OS 分追加
+    - CUDA は CUDA 12.0 でのコンパイル検証のみ (GPU 実機なし、実行検証は未実施)
