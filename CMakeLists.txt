@@ -4,6 +4,19 @@ project(openBPM
   DESCRIPTION "A free and open source BPM solver"
   LANGUAGES C CXX)
 
+# ── 既定のビルドタイプ ───────────────────────────────────────────────
+# CMAKE_BUILD_TYPE 未指定だと GCC/Clang は最適化なし (-O0) でコンパイルする。
+# ReadMe が案内するビルド手順は -DCMAKE_BUILD_TYPE を渡さないため、
+# 何も指定しないと数値カーネルが 2.4〜2.7 倍遅いバイナリになっていた
+# (実測 : fiber 0.76 -> 0.28 秒、slab_polarization 51.5 -> 21.1 秒。
+#  結果は -O0 と Release でビット一致するので純粋な速度差)。
+# マルチコンフィグジェネレータ (Visual Studio / Ninja Multi-Config) は
+# CMAKE_CONFIGURATION_TYPES を使うのでここでは触らない。
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type (default: Release)" FORCE)
+    message(STATUS "CMAKE_BUILD_TYPE 未指定のため Release を使用します")
+endif()
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)

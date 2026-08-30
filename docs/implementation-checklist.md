@@ -737,3 +737,55 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
       `modes` (モードソルバは PML 非適用、neff 不変) で正常終了
     - ctest 10 本通過。CI に PML スモーク (出口電力 < 0.1) を 3 OS 分追加
     - CUDA は CUDA 12.0 でのコンパイル検証のみ (GPU 実機なし、実行検証は未実施)
+
+# 第 14 回: 性能 — 既定ビルドが -O0、かつ BPM が FDTD 専用セットアップを実行していた
+
+プロファイリング (gprof + callgrind) からのボトルネック特定。
+
+- [x] **`CMAKE_BUILD_TYPE` 未指定 = 最適化なし (-O0) でビルドされていた** ✅ 対応済み
+  - 場所: `CMakeLists.txt` / `ReadMe.md` / `CLAUDE.md` / `AGENTS.md`
+  - 現状 (対応前): CMakeLists は既定のビルドタイプを設定しておらず、
+    ReadMe が案内する `cmake -S . -B build` には `-DCMAKE_BUILD_TYPE` が無い。
+    GCC/Clang はこの場合 **最適化フラグ無し (-O0)** でコンパイルするため、
+    利用者の既定ビルドは CI (Release) の 2.4〜2.7 倍遅いバイナリだった
+    (実測: fiber 0.76 → 0.28 秒、slab_polarization 51.5 → 21.1 秒)。
+  - 対応内容: 単一コンフィグジェネレータで `CMAKE_BUILD_TYPE` 未指定なら
+    Release を設定 (マルチコンフィグ = VS / Ninja Multi-Config は従来どおり)。
+    configure 時にその旨を message で表示する。
+  - 検証: `-O0` ビルドと Release ビルドの HDF5 出力が**ビット一致** (最大絶対差 0)。
+    速度差のみで数値は変わらない。
+- [x] **BPM が使わない FDTD 専用セットアップを毎回実行していた** ✅ 対応済み
+  - 場所: `sol/setup.c` (`setup_bpm()` 新設) / `include/obpm_prototype.h` /
+    `src/sol_Main.cpp` / `src/cuda_Main.cu` / `sol/setupDispersion.c`
+  - 現状 (対応前): `setup()` が Yee 格子の材料 ID ラスタライズ (`setupId`)・
+    分散性材料テーブル (`setupDispersion`)・吸収境界係数 (Mur/PML) を必ず構築して
+    いたが、これらを参照するのは FDTD 専用コード (`efeed` / `update*` / `setupMur*` /
+    `setupPml*` / `setup_vector`) だけで、BPM は一切使わない
+    (BPM の屈折率はセル中心で独自にラスタライズする)。
+    gprof では `setupDispersion` 16.7% + `ingeometry` 13.5% + `setupDispersion_id`
+    4.8% + `NodeE_c/NodeH_c` 7.4% と、実行時間の約半分を占めていた。
+  - 対応内容: BPM 用の `setup_bpm()` を新設し、時間刻み・材料係数・メッシュ係数・
+    DFT 係数のみを構築する。あわせて `setupDispersion` に「分散性材料 (type = 2) が
+    無ければ全格子走査をしない」早期終了を追加した (FDTD 側にも効く)。
+- [x] **遠方界用の閉曲面を obpm.out 不要時にも準備していた** ✅ 対応済み
+  - 場所: `sol/outputChars.c` / `include/obpm_prototype.h` / 各 main
+  - 現状 (対応前): `outputChars()` が常に `alloc_farfield` / `setup_farfield` を
+    実行していた。Surface 配列を読むのは `writeout` (obpm.out) と遠方界計算だけで、
+    `-no-fdtd-out` 指定時は誰も参照しない。
+  - 対応内容: `outputChars(FILE *, int farfield)` に引数を追加し、BPM の main は
+    `fdtd_out || IPlanewave` を渡す (FDTD 系 main は従来どおり 1)。
+  - 検証: obpm.out を書く場合の内容は **md5 一致** (バイト単位で不変)。
+    `-no-fdtd-out` 時の obpm.log の内容も不変 (差分は日時と CPU 時間のみ)。
+- 全体の検証:
+  - `data/` + `data/sample/` の**全 24 サンプル**で HDF5 の全データセットが
+    変更前と**数値完全一致** (最大絶対差 0)、obpm.out は md5 一致
+  - 決定論的な命令数 (valgrind callgrind, 同一 Release ビルド同士):
+    fiber 4.939e9 → 3.164e9 (**-36%**)、slab_polarization (200 步) 4.923e9 →
+    2.921e9 (**-41%**)。壁時計はコンテナのノイズが大きいため命令数で評価した
+  - ctest 10 本通過 (総実行時間 88 秒 → 12 秒)
+  - 試したが**採用しなかった**最適化: `adi_step` の作業バッファをステップ間で
+    使い回す案は命令数 -0.45%・ページフォルト同数で効果が無く、共有可変状態が
+    増えるだけなので撤回した
+  - CUDA / MPI 版は main の 1 行 (`setup_bpm()` / `outputChars` の引数) のみの
+    変更。今回の環境には CUDA/MPI ツールキットが無いためローカルでの
+    コンパイル検証はできておらず、CI の build-cuda / build-mpi で確認する

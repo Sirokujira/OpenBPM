@@ -13,6 +13,7 @@ OpenFDTD のコード構造を土台にしたビーム伝搬法 (BPM) 光導波�
 
 ```sh
 # 依存: cmake, gcc/g++, libhdf5-dev, libeigen3-dev (+ OpenMP, テストに h5py/numpy)
+# ビルドタイプ未指定時は Release (最適化あり) が既定。デバッグは -DCMAKE_BUILD_TYPE=Debug
 cmake -S . -B build -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 cmake --build build -j
 ctest --test-dir build --output-on-failure   # 解析解との比較検証 10 本
