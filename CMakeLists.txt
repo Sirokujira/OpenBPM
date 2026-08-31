@@ -25,7 +25,10 @@ set(CMAKE_CXX_STANDARD 17)
 # libm は存在しない (MATH_LIB を空にする)。ソースは UTF-8 (日本語コメント)。
 # M_PI 等は _USE_MATH_DEFINES が必要。
 if(MSVC)
-    add_compile_options(/utf-8)
+    # /utf-8 (と /bigobj) は C/C++ にだけ直接渡す。nvcc は cl.exe 用の / オプションを
+    # 理解しないので、CUDA ソースには -Xcompiler で中継する (WITH_CUDA=ON のとき)。
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>")
     add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS NOMINMAX)
     set(MATH_LIB "")
 else()
@@ -41,6 +44,16 @@ option(WITH_CUDA "Enable CUDA support" OFF)
 if(WITH_CUDA)
     # CUDA は WITH_CUDA=ON のときだけ有効化する (nvcc の無い環境・CI でも
     # CPU 版をビルドできるようにする)
+    # CMAKE_CUDA_ARCHITECTURES を利用者が -D で与えたか (または環境変数 CUDAARCHS) を
+    # 初回 configure で記憶する。enable_language(CUDA) の後は CMake 自身が既定値を
+    # キャッシュに書くため、後からでは利用者指定と区別できない。
+    if(NOT DEFINED OFD_CUDA_ARCH_USER_SPECIFIED)
+        if(DEFINED CMAKE_CUDA_ARCHITECTURES OR DEFINED ENV{CUDAARCHS})
+            set(OFD_CUDA_ARCH_USER_SPECIFIED ON CACHE INTERNAL "CMAKE_CUDA_ARCHITECTURES was given by the user")
+        else()
+            set(OFD_CUDA_ARCH_USER_SPECIFIED OFF CACHE INTERNAL "CMAKE_CUDA_ARCHITECTURES was given by the user")
+        endif()
+    endif()
     enable_language(CUDA)
     #set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
     message(STATUS ${CMAKE_CUDA_COMPILER})
@@ -49,7 +62,19 @@ if(WITH_CUDA)
     #find_package(CUDA REQUIRED)
     # CUDAToolkit を探す
     find_package(CUDAToolkit REQUIRED)
-    set(CMAKE_CUDA_ARCHITECTURES 60)
+    # 既定の GPU アーキテクチャ。-DCMAKE_CUDA_ARCHITECTURES=86 のように与えれば
+    # そちらが優先される (例: RTX 30xx = 86, RTX 40xx = 89)。
+    # CUDA 13 は sm_60 / sm_70 (Pascal / Volta) のサポートを打ち切ったため、
+    # 従来の既定 60 のままだと nvcc 13 で "Unsupported gpu architecture" になる。
+    # nvcc のメジャー版で既定を切り替える (13 以降は 75 = Turing 以降)。
+    if(NOT OFD_CUDA_ARCH_USER_SPECIFIED)
+        if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+            set(CMAKE_CUDA_ARCHITECTURES 75)
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES 60)
+        endif()
+    endif()
+    message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES} (nvcc ${CMAKE_CUDA_COMPILER_VERSION})")
     #message(STATUS "_MPI マクロが定義されました")
     # CUDA のコンパイラフラグを設定
     #set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -Xcompiler -pthread")
@@ -293,13 +318,17 @@ if (WITH_CUDA)
             add_library(obpm_cuda_libmpi ${SOURCES2} ${MPI_SOURCES2} ${CUDA_MPI_SOURCES} ${CUDA_SOURCES2})
             target_include_directories(obpm_cuda_libmpi PUBLIC "${PROJECT_SOURCE_DIR}/include")
             target_link_libraries(obpm_cuda_libmpi PRIVATE ${CUDA_LIBRARIES})
-            target_link_libraries(obpm_cuda_libmpi PRIVATE OpenMP::OpenMP_C pthread m)
+            target_link_libraries(obpm_cuda_libmpi PRIVATE OpenMP::OpenMP_C Threads::Threads ${MATH_LIB})
             target_link_libraries(obpm_cuda_libmpi PRIVATE MPI::MPI_C HDF5::HDF5)
             #error
             #target_link_libraries(obpm_cuda_libmpi PRIVATE MPI::MPI_C HDF5::HDF5-shared)
 
             #add_executable(obpm_cuda_mpi ${SOURCES2} ${MPI_SOURCES2} ${CUDA_MPI_SOURCES} ${CUDA_SOURCES2} src/cuda_mpi_Main.cu)
             add_executable(obpm_cuda_mpi src/cuda_mpi_Main.cu)
+            if(MSVC)
+                # MSVC の既定スタック 1MB では FDTD ループが不足する (CPU 版と同じ 16MB)
+                target_link_options(obpm_cuda_mpi PRIVATE /STACK:16777216)
+            endif()
 
             #
             target_include_directories(obpm_cuda_mpi PUBLIC "${PROJECT_SOURCE_DIR}/include")
@@ -308,7 +337,7 @@ if (WITH_CUDA)
             #obpm_cuda_libmpi
             target_link_libraries(obpm_cuda_mpi PRIVATE obpm_cuda_libmpi)
             target_link_libraries(obpm_cuda_mpi PRIVATE ${CUDA_LIBRARIES})
-            target_link_libraries(obpm_cuda_mpi PRIVATE OpenMP::OpenMP_C pthread m)
+            target_link_libraries(obpm_cuda_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads ${MATH_LIB})
             target_link_libraries(obpm_cuda_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
         else ()
             # Add CUDA source files
@@ -354,6 +383,10 @@ if (WITH_CUDA)
             #add_executable(obpm_cuda ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
             # bpm/wabpm.cpp / bpm/modes.cpp はホスト側モード解析 (modes キーワード) 用
             add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} bpm/FDBPMpropagator.cu bpm/wabpm.cu bpm/wabpm.cpp bpm/modes.cpp src/cuda_Main.cu)
+            if(MSVC)
+                # MSVC の既定スタック 1MB では FDTD ループが不足する (CPU 版と同じ 16MB)
+                target_link_options(obpm_cuda PRIVATE /STACK:16777216)
+            endif()
             #add_executable(obpm_cuda ${SOURCES2} ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
 
             target_include_directories(obpm_cuda PUBLIC "${PROJECT_SOURCE_DIR}/include")
@@ -376,16 +409,16 @@ if (WITH_CUDA)
                 #target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C Threads::Threads)
                 #target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C Threads::Threads m)
                 # obpm と同じ理由で CXX も必要 (host 側の bpm/*.cpp が OpenMP を使う)
-                target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX pthread)
+                target_link_libraries(obpm_cuda PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX Threads::Threads)
                 #target_link_libraries(obpm PRIVATE MPI::MPI_C OpenMP::OpenMP_C m)
-                target_link_libraries(obpm_cuda PRIVATE m HDF5::HDF5)
+                target_link_libraries(obpm_cuda PRIVATE ${MATH_LIB} HDF5::HDF5)
             else()
                 message(STATUS "OpenMP not FOUND.")
                 #target_link_libraries(obpm_cuda PUBLIC m)
                 #target_link_libraries(obpm_cuda PRIVATE Threads::Threads m)
                 #target_link_libraries(obpm_cuda PRIVATE Threads::Threads)
-                target_link_libraries(obpm_cuda PRIVATE pthread)
-                target_link_libraries(obpm_cuda PRIVATE m HDF5::HDF5)
+                target_link_libraries(obpm_cuda PRIVATE Threads::Threads)
+                target_link_libraries(obpm_cuda PRIVATE ${MATH_LIB} HDF5::HDF5)
             endif()
 
         endif()
@@ -471,12 +504,16 @@ else()
         #file(GLOB MPI_SOURCES "mpi/*.c")
         #target_compile_definitions(obpm_mpi PRIVATE _MPI)
         add_executable(obpm_mpi ${SOURCES3} ${MPI_SOURCES} src/mpi_Main.c)
+        if(MSVC)
+            # MSVC の既定スタック 1MB では FDTD ループが不足する (CPU 版と同じ 16MB)
+            target_link_options(obpm_mpi PRIVATE /STACK:16777216)
+        endif()
 
         # Include directories for header files
         target_include_directories(obpm_mpi PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
         #target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C OpenMP::OpenMP_C m)
-        target_link_libraries(obpm_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads m)
+        target_link_libraries(obpm_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads ${MATH_LIB})
         target_link_libraries(obpm_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
     else ()
         #add_executable(obpm ${SOURCES} sol/solve_bpm.cpp src/sol_Main.c)
