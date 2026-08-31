@@ -182,6 +182,23 @@ jobs:
                print "GRIN mode OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
 
+      # 高コントラストスラブのモード解析 : 半ベクトル/スカラーの導波判定と
+      # 虚軸伝搬の 2 段階反復 (格子スケールでの仕上げ) の回帰検出。
+      # コアが y の上下端に達する形状なので、導波判定を境界リング全体の最大値で
+      # 行う退行が入ると「modes : 0 / 1」となり neff 行が消える。
+      # 期待値: 分散方程式の厳密解 1.674176 に対し、y 方向の閉じ込め (-1.7e-3) と
+      # 離散化 (+1e-3) を含めてログ値 1.673451。判定は ±3e-3。
+      - name: Smoke test — high-contrast slab mode (TE dispersion)
+        run: |
+          mkdir -p /tmp/smoke-slab && cd /tmp/smoke-slab
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out "$GITHUB_WORKSPACE/data/slab_polarization.ofd"
+          grep -q "normal end" obpm.log
+          grep -q "modes : 1 / 1 converged" obpm.log
+          awk '/mode 1 : neff/ { err = $NF - 1.673451; if (err < 0) err = -err
+               if (err > 3e-3) { print "FAIL: slab neff " $NF " != 1.673451 (err " err ")"; exit 1 }
+               print "slab mode OK: neff = " $NF; ok = 1 }
+               END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+
       # PML 吸収境界 : 15 度傾けたビームを側壁へ入射させ、出口電力で判定する。
       # PML が効いていれば全電力が吸収されて output power = 3.085e-02
       # (入射比 7.67e-05)、効かず反射すると 3.949e+02 (0.982) に戻るため

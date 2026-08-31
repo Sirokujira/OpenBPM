@@ -250,12 +250,91 @@ static void test_highcontrast_multimode()
                "max |<m_p, m_q>| = " + std::to_string(maxovl));
 }
 
+// スラブ導波路の TE / TM 実効屈折率 (半ベクトル差分 = Stern の解析解検証)
+//
+// 対称スラブ (コア厚 2a, 芯 n1 / クラッド n2) の基本モードは
+//   u = kappa*a,  V = k0*a*sqrt(n1^2-n2^2),  (gamma*a)^2 = V^2 - u^2
+//   TE : u tan(u) = gamma*a
+//   TM : u tan(u) = (n1/n2)^2 * gamma*a       <- 半ベクトル (Stern) 差分が効く
+// で決まる。TE と TM で neff が大きく分かれる (この設定で 1.674 vs 1.358) ため、
+// Stern の重みが正しいかどうかを鋭敏に検出できる。
+//
+// 2D ソルバーで y 不変のスラブを解くと y 方向の閉じ込め (Dirichlet) の分だけ
+// neff が下がる。y は分離可能なので、離散ラプラシアンの固有値
+//   lam_y = -(4/dy^2) sin^2(pi/(2(Ny+1)))
+// を厳密に差し引けば 1D スラブの neff を復元できる。
+//
+// 許容誤差は離散化誤差から決める : dx = 25nm での実測は TE +9.8e-4 / TM +1.6e-3 で、
+// dx を半分にすると 1/4 (O(dx^2)) になることを確認済み (dx=6.25nm で 6e-5 / 1e-4)。
+static double slab_neff_analytic(double k0, double n1, double n2, double a, int tm)
+{
+    const double V = k0 * a * std::sqrt(n1 * n1 - n2 * n2);
+    auto f = [&](double u) {
+        const double w = std::sqrt(std::max(0.0, V * V - u * u));
+        const double c = tm ? ((n1 * n1) / (n2 * n2)) : 1.0;
+        return u * std::tan(u) - c * w;
+    };
+    double lo = 1e-12, hi = std::min(0.5 * M_PI - 1e-12, V - 1e-12);
+    for (int it = 0; it < 200; it++) {
+        const double mid = 0.5 * (lo + hi);
+        if (f(mid) > 0) hi = mid; else lo = mid;
+    }
+    const double kap = 0.5 * (lo + hi) / a;
+    return std::sqrt(n1 * n1 - (kap / k0) * (kap / k0));
+}
+
+static void test_slab_te_tm()
+{
+    const double lambda = 1.55e-6;
+    const double k0 = 2 * M_PI / lambda;
+    const double n1 = 2.0, n2 = 1.0;      // 高コントラスト (Si 系相当)
+    const double a = 0.2e-6;              // 半幅 (コア厚 0.4um)
+    const int Nx = 320, Ny = 40;
+    const double dx = 8.0e-6 / Nx, dy = 10.0e-6 / Ny;
+    const long N = (long)Nx * Ny;
+
+    std::vector<cplx> n2m((size_t)N);
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double x = coordm(ix, Nx, dx);
+            const double n = (std::fabs(x) < a) ? n1 : n2;
+            n2m[ix + (long)iy * Nx] = cplx(n * n, 0.0);
+        }
+    }
+    // y 方向 (Dirichlet) の離散固有値 : 分離可能なので厳密に差し引ける
+    const double sy = std::sin(M_PI / (2 * (Ny + 1)));
+    const double lam_y = -(4.0 / (dy * dy)) * sy * sy;
+
+    double neff_te = 0, neff_tm = 0;
+    for (int pol = 1; pol <= 2; pol++) {          // 1 = x 偏波 (TM), 2 = y 偏波 (TE)
+        // 参照屈折率は中間値 (1.5) にする : 以前はこの指定でスプリアス格子モードへ
+        // 収束していた (find_modes が内部で境界屈折率に取り直すことの回帰検出)
+        wabpm_params W = mode_params(Nx, Ny, dx, dy, lambda, 1.5, n1);
+        W.pol = pol;
+        std::vector<cplx> mode((size_t)N);
+        double v = 0;
+        const int nf = wabpm_find_modes(&W, n2m.data(), 1, 40000, 1e-12, mode.data(), &v);
+        const double neff = (nf == 1) ? std::sqrt(v * v - lam_y / (k0 * k0)) : 0.0;
+        if (pol == 1) neff_tm = neff; else neff_te = neff;
+        check_true(std::string("slab: ") + ((pol == 1) ? "TM" : "TE") + " mode found",
+                   nf == 1, "nFound = " + std::to_string(nf));
+    }
+
+    const double te_ana = slab_neff_analytic(k0, n1, n2, a, 0);
+    const double tm_ana = slab_neff_analytic(k0, n1, n2, a, 1);
+    check_close("slab: TE neff (dispersion eq.)", neff_te, te_ana, 3e-3);
+    check_close("slab: TM neff (dispersion eq., Stern)", neff_tm, tm_ana, 3e-3);
+    // 偏波分離そのもの (TE - TM = 0.3164) が再現できていること
+    check_close("slab: TE-TM splitting", neff_te - neff_tm, te_ana - tm_ana, 2e-2);
+}
+
 int main()
 {
     std::printf("=== wabpm_find_modes unit tests ===\n");
     test_smf_lp01();
     test_fmf_lp01_lp11();
     test_highcontrast_multimode();
+    test_slab_te_tm();
 
     std::printf("\n%d failure(s).\n", g_failures);
     return g_failures == 0 ? 0 : 1;

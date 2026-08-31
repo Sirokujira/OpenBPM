@@ -63,28 +63,44 @@ static double rayleigh_v(const wabpm_params *W, const cplx *E, const cplx *n2, c
 	return (W->n0 * W->n0) + (mu / (W->k0 * W->k0));
 }
 
-// 導波判定のしきい値 (= クラッド相当の neff^2) を n^2 スライスの境界リングから求める。
-// 導波モードは境界へ向かって減衰する必要があるため、境界セルの Re(n^2) の最大値を
-// しきい値とする (それ以下の neff は放射状態)。参照屈折率 W->n0 を使わないのは、
-// n0 は位相基準の選択にすぎず、GRIN のように「n0 = 軸上最大値」を選ぶと
-// 全モードが誤って棄却されるため (クラッド一定のファイバでは n0 = クラッドと
-// 一致していたので顕在化しなかった)。
+// 導波判定のしきい値 (= クラッド相当の neff^2) を n^2 スライスの境界から求める。
+//
+// 導波モードは開いた境界へ向かって減衰する必要があるので、境界セルの屈折率と
+// 比較する。参照屈折率 W->n0 を使わないのは、n0 は位相基準の選択にすぎず、
+// GRIN のように「n0 = 軸上最大値」を選ぶと全モードが誤って棄却されるため。
+//
+// **辺ごとに最大値を取り、その最小値をしきい値とする**。境界リング全体の最大値に
+// すると、y 不変のスラブ導波路 (コアが y の上下端に達する) のようにコアが境界へ
+// 接する構造で「しきい値 = コア屈折率」となり、正しいモードまで棄却されてしまう
+// (data/slab_polarization.ofd がこれに該当する)。辺ごとの最大値の最小値なら、
+// ファイバのようにクラッドが 4 辺を囲む構造では従来と同じ値になり、
+// スラブでは開いた辺 (クラッド) の屈折率が選ばれる。
 // 対称境界 (symx/symy) の鏡像面 (ix = 0 / iy = 0) は物理境界ではないため除外する。
 double wabpm_guided_threshold(const wabpm_params *W, const cplx *n2)
 {
 	const long Nx = W->Nx;
 	const long Ny = W->Ny;
-	double v0 = 0.0;
+	double side[4] = {-1.0, -1.0, -1.0, -1.0};   // x-, x+, y-, y+ の各辺の最大値
 	for (long iy = 0; iy < Ny; iy++) {
 		for (long ix = 0; ix < Nx; ix++) {
-			const int on_x = (ix == Nx - 1) || ((ix == 0) && !W->symx);
-			const int on_y = (iy == Ny - 1) || ((iy == 0) && !W->symy);
-			if (!on_x && !on_y) continue;
+			const int on_xlo = (ix == 0) && !W->symx;
+			const int on_xhi = (ix == Nx - 1);
+			const int on_ylo = (iy == 0) && !W->symy;
+			const int on_yhi = (iy == Ny - 1);
+			if (!on_xlo && !on_xhi && !on_ylo && !on_yhi) continue;
 			const double v = n2[ix + iy * Nx].real();
-			if (v > v0) v0 = v;
+			if (on_xlo && (v > side[0])) side[0] = v;
+			if (on_xhi && (v > side[1])) side[1] = v;
+			if (on_ylo && (v > side[2])) side[2] = v;
+			if (on_yhi && (v > side[3])) side[3] = v;
 		}
 	}
-	return v0;
+	double v0 = -1.0;
+	for (int k = 0; k < 4; k++) {
+		if (side[k] < 0) continue;                    // 対称境界で存在しない辺
+		if ((v0 < 0) || (side[k] < v0)) v0 = side[k];
+	}
+	return (v0 < 0) ? 0.0 : v0;
 }
 
 int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
@@ -94,6 +110,38 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 	const long Nx = W->Nx;
 	const long Ny = W->Ny;
 	const long N = Nx * Ny;
+
+	// 反復に使う参照屈折率は「境界 (クラッド) の屈折率」に取り直す。
+	//
+	// 虚軸伝搬の増幅率は Cayley 写像 (1 + a*mu)/(1 - a*mu) (mu = P の固有値) で、
+	// これは |a*mu| >> 1 の高周波格子モードを減衰させない (絶対値が 1 に漸近する)。
+	// 一方 P には屈折率項 k0^2 (n^2 - n0^2) が入るため、n0 をコアとクラッドの
+	// 中間に取ると、コア領域で正の屈折率項を持つ「x 方向 Nyquist モード」の増幅率が
+	// 導波モードを上回り、そちらへ収束してしまう (実測: n1=2.0/n2=1.0 のスラブに
+	// refindex = 1.5 を与えると neff^2 = -372 のスプリアス状態に収束した)。
+	// n0 を境界の屈折率に取ると導波モードの mu = k0^2(neff^2 - n_clad^2) が
+	// 最大固有値になり、この病理が起きない (neff 自体は n0 に依らない量)。
+	//
+	// 虚軸ステップ幅は呼び出し側が a = dz/(4 k0 n0) を意図して決めているので、
+	// a を保つように dz を n0 の変更に合わせて取り直す。
+	const double v0_thr = wabpm_guided_threshold(W, n2);
+	wabpm_params Wm = *W;
+	if (v0_thr > 0) {
+		const double n0_new = std::sqrt(v0_thr);
+		const double a_keep = W->dz / (4 * W->k0 * W->n0);
+		Wm.n0 = n0_new;
+		Wm.dz = a_keep * 4 * W->k0 * n0_new;
+	}
+	W = &Wm;
+
+	// 虚軸ステップ幅 : 段階 1 (選択) は呼び出し側の指定、
+	// 段階 2 (仕上げ) は格子スケール a = 1/(4/dx^2 + 4/dy^2)
+	const wabpm_params Wsel = Wm;
+	const double a_sel = Wsel.dz / (4 * Wsel.k0 * Wsel.n0);
+	const double a_pol = 1.0 / ((4.0 / (Wsel.dx * Wsel.dx)) + (4.0 / (Wsel.dy * Wsel.dy)));
+	wabpm_params Wpol = Wsel;
+	Wpol.dz = a_pol * 4 * Wsel.k0 * Wsel.n0;
+	const int usePolish = (a_pol < a_sel);
 
 	cplx *E = new cplx[N];
 	cplx *work = new cplx[N];
@@ -120,32 +168,54 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 		deflate(E, modes, m, N);
 		normalize(E, N);
 
-		// 導波条件のしきい値 : 境界リングの n^2 (neff がこれを超えるモードのみ導波)
-		const double v0 = wabpm_guided_threshold(W, n2);
+		// 導波条件のしきい値 (辺ごとの最大値の最小値)
+		const double v0 = v0_thr;
 		double v_prev = 0.0;
 		int converged = 0;
-		int unguided = 0;
-		for (int it = 0; it < maxIter; it++) {
-			wabpm_imagdist_step(W, E, n2);
-			deflate(E, modes, m, N);
-			if (normalize(E, N) == 0.0) break;   // 部分空間が尽きた
 
-			const double v = rayleigh_v(W, E, n2, work);
-			// 十分反復しても導波条件に達しないままなら残りは放射状態 :
-			// これ以上のモードは存在しないため打ち切る
-			if (it >= 2000 && v <= v0) {
-				unguided = 1;
-				break;
-			}
-			if (it > 0 && std::fabs(v - v_prev) < tol) {
+		// 2 段階で反復する。
+		//  段階 1 (選択)  : 呼び出し側が指定した虚軸ステップ幅。1 ステップの利得が
+		//                   大きく速いが、|a*mu| >> 1 の高周波格子モードを減衰させない
+		//                   (Cayley 写像の絶対値が 1 に漸近する) ため、高コントラスト
+		//                   構造ではスプリアス状態に落ちることがある。
+		//  段階 2 (仕上げ): 格子スケール a = 1/(4/dx^2 + 4/dy^2) で反復する。高周波成分は
+		//                   確実に減衰し、ADI 分離誤差 O(a^2 Px Py) も小さくなるため、
+		//                   得られる neff が格子細分化で解析解に収束するようになる
+		//                   (段階 1 のみだと dx を半分にすると誤差が増えていた)。
+		// 段階 1 が導波条件に届かなくても段階 2 を試す (半ベクトルの高コントラスト
+		// 構造は段階 1 でスプリアスに落ちるが、段階 2 で正しいモードに復帰する)。
+		for (int stage = 0; stage < 2; stage++) {
+			const wabpm_params *Ws = (stage == 0) ? &Wsel : &Wpol;
+			if ((stage == 1) && !usePolish) break;
+			// 段階 2 は前段の結果を初期値として引き継ぐ
+			converged = 0;
+			int stall = 0;
+			for (int it = 0; it < maxIter; it++) {
+				wabpm_imagdist_step(Ws, E, n2);
+				deflate(E, modes, m, N);
+				if (normalize(E, N) == 0.0) { stall = 1; break; }
+
+				const double v = rayleigh_v(Ws, E, n2, work);
+				// 十分反復しても導波条件に達しないなら放射状態と判断して打ち切る
+				// (段階 2 はスプリアスからの復帰に時間がかかるので余裕を持たせる)
+				const int giveup = (stage == 0) ? 2000 : 4000;
+				if ((it >= giveup) && (v <= v0)) {
+					v_prev = v;
+					stall = 1;
+					break;
+				}
+				if ((it > 0) && (std::fabs(v - v_prev) < tol)) {
+					v_prev = v;
+					converged = 1;
+					break;
+				}
 				v_prev = v;
-				converged = 1;
-				break;
 			}
-			v_prev = v;
+			if (stall && !usePolish) break;
+			if (stall && (stage == 1)) break;
 		}
-		// 導波条件 (n0 < neff) を満たすモードのみ採用する
-		if (!converged || unguided || v_prev <= v0) break;
+		// 導波条件を満たすモードのみ採用する
+		if (!converged || (v_prev <= v0)) break;
 
 		std::memcpy(&modes[(size_t)m * N], E, (size_t)N * sizeof(cplx));
 		neff[m] = std::sqrt(v_prev);
