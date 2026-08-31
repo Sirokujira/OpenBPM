@@ -90,7 +90,9 @@ int main(int argc, char *argv[])
 	memalloc1();
 	memalloc2();
 	memalloc3();
-	setup();
+	// BPM は FDTD の時間更新を行わないため、FDTD 専用のセットアップ
+	// (Yee 格子の材料 ID / 分散テーブル / ABC 係数) は行わない
+	setup_bpm();
 
 	// monitor
 	if (io) {
@@ -112,7 +114,7 @@ int main(int argc, char *argv[])
 	// output
 	if (io) {
 		// calculation and output
-		outputChars(fp_log);
+		outputChars(fp_log, fdtd_out || IPlanewave);
 
 		// write obpm.out (OpenFDTD 形式)。BPM の結果は time_series_data.h5 にあり、
 		// obpm.out は obpm_post の入力用。-no-fdtd-out 指定時はスキップする

@@ -25,6 +25,16 @@ struct wabpm_params {
 	//   0 = なし (Dirichlet), 1 = 対称 (E[-1] = E[0]), 2 = 反対称 (E[-1] = -E[0])
 	int    symx;         // x 方向 (ix = 0 側)
 	int    symy;         // y 方向 (iy = 0 側)
+	// PML (複素座標伸長) : 面ごとの伸長係数の逆数。NULL なら PML 無効。
+	//   s(x) = 1 - i*sigma(x) に対し
+	//   gxm[ix] = 1/(s(Xc[ix]) * s(Xn[ix]))    (ix-1 側の面)
+	//   gxp[ix] = 1/(s(Xc[ix]) * s(Xn[ix+1]))  (ix+1 側の面)
+	// 横方向ラプラシアンの各面の項にこれを掛けると、PML 層内で外向き波が
+	// exp(-|kx| * sigma * 距離) で減衰し、境界反射が抑えられる。
+	const std::complex<double> *gxm = nullptr;
+	const std::complex<double> *gxp = nullptr;
+	const std::complex<double> *gym = nullptr;
+	const std::complex<double> *gyp = nullptr;
 };
 
 // 1 ステップ伝搬 (E, n2 は Nx*Ny, 行優先 [iy*Nx+ix])

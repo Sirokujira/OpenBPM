@@ -336,6 +336,7 @@ main に新規変更なし、マーカー走査 0 件。E2E 検証 (ONN/回折/�
 | テスト | 対象 | 検証内容 |
 |---|---|---|
 | `test_wabpm` | `bpm/wabpm.cpp` | 回折 (近軸/広角)・エネルギー保存・吸収減衰・曲げ偏向・半ベクトル整合 |
+| `test_pml` | `bpm/wabpm.cpp` (PML) | 伸長なしのビット一致・境界反射 (壁なし参照比) ・理論式 R0^(2 sinθ) との一致 |
 | `test_modes` | `bpm/modes.cpp` | LP01/LP11 実効屈折率 (分散方程式の厳密解と比較)・直交性 |
 | `test_allset` | `include/bpm/allset.hpp` | findModes / modeSuperposition / offsetField / tiltField |
 | `test_fdbpm` | `bpm/FDBPMpropagator.c` | スカラー近軸カーネルの回折・エネルギー保存・吸収・ビーム中心保持 |
@@ -690,3 +691,167 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
       3.2e-5 で許容 (±5e-4) 内。modes = 経路の値と一致するようになった
     - CI: GRIN スモークに neff 判定 (解析解 1.465066 ± 5e-4) を追加。
       判定退行 (n0 比較に戻ると neff 行が消える) を検知する
+
+# 第 13 回: 機能追加 — PML 吸収境界 (複素座標伸長)
+
+- [x] **横方向境界の反射が非常に大きい (端部吸収体がほぼ効いていない)** ✅ 対応済み
+  - 場所: `include/obpm.h` / `sol/input_data.c` / `bpm/FDBPMpropagator.c(.cu)` /
+    `bpm/wabpm.cpp(.cu)` / `include/bpm/wabpm.h` / `include/bpm/bpm_prototype.h` /
+    `sol/solve_bpm.cpp` / `cuda/solve_bpm.cu` / `tests/test_pml.cpp` /
+    `data/sample/pml_tilt.ofd`
+  - 現状 (対応前): 境界処理は BPM-Matlab 由来の振幅 multiplier
+    `exp(-dz*dist^2*alpha)` のみ (alpha = 3e14 固定・幅は領域の 5% 固定)。
+    µm スケールの領域では最外セルでも 1 ステップあたり exp(-6e-4) にしかならず、
+    **実質的に吸収していない**。15° 傾けたガウシアンを側壁へ入射させると
+    重心が壁で折り返し、入射電力の **73%** が領域内へ反射して戻る
+    (壁の無い広領域の参照計算と内部窓の残留電力を比較して定量化)。
+    ユーザーが強度を調整する手段も無かった。
+  - 対応内容: `pml = <width[m]> [<R0>]` を追加 (省略時は従来動作)。
+    横方向の微分を `∂/∂x -> (1/s(x))∂/∂x`、`s(x) = 1 - i*sigma(x)` と伸長する。
+    位相規約が `exp(-i k z)` のため外向き波は層内で `exp(-|kx|∫sigma dx)` で減衰し、
+    屈折率を変えないので垂直入射でも不整合反射が生じない。
+    `sigma(d) = sigma_max (d/W)^3`、`sigma_max = -(m+1)ln(R0)/(2 k0 n0 W)` (m = 3)。
+    - 実装は面ごとの係数 `gm[i] = 1/(s(cent_i) s(face_{i-1/2}))`,
+      `gp[i] = 1/(s(cent_i) s(face_{i+1/2}))` を横方向ラプラシアンの各面に掛ける形。
+      近軸カーネル (float) は `P->pml*` 配列、拡張カーネル (double) は
+      `wabpm_params::g*` 経由。**未指定時は NULL でスカラー係数のまま**
+    - 近軸カーネルは毎ステップ `fieldCorrection = sqrt(precisePower/EfieldPower)` で
+      場を再正規化するため、そのままでは PML の吸収が打ち消される。
+      PML 使用時は `precisePower` を実際の場の電力に同期させる (TPA と同じ手当)
+    - PML 指定時は従来の振幅吸収体を無効化 (multiplier = 1)
+    - 対称境界の鏡像面側には PML を置かない
+    - CPU の近軸/拡張 **両経路** と CUDA 版 (両カーネル + デバイス転送) に実装
+  - 検証:
+    - **後方互換**: `pml` 未指定で `data/` + `data/sample/` の**全 23 サンプル**の
+      HDF5 全データセットが変更前と**数値完全一致** (最大絶対差 0)
+    - **境界反射 (壁なし参照との比較)**: 15° 入射で
+      従来吸収体 = 入射電力の **73%** が反射、`pml = 4e-6` = **9.5e-08** (近軸)、
+      **1.6e-09** (広角パス)。出口電力比も 0.982 → 7.67e-05
+    - **理論との一致**: 往復電力反射率は連続体の理論式 `R = R0^(2 sinθ)` に沿って
+      下がる (R0 = 1e-4 で実測 9.7e-3 / 理論 8.5e-3)。R0 = 1e-20 付近で
+      離散化由来の反射床 (~1e-7) に飽和する (PML 一般の性質)
+    - **単体テスト** `tests/test_pml.cpp` (ctest `pml_unit`) を追加:
+      伸長なし (sigma = 0) のビット一致 / 反射 5.95e-09 (Dirichlet 境界は 0.752) /
+      理論式との比 0.64 (許容 1/3〜3)
+    - 併用確認: `symmetry` (鏡像面に PML を置かない) ・`taper`/`twist` ・
+      `modes` (モードソルバは PML 非適用、neff 不変) で正常終了
+    - ctest 10 本通過。CI に PML スモーク (出口電力 < 0.1) を 3 OS 分追加
+    - CUDA は CUDA 12.0 でのコンパイル検証のみ (GPU 実機なし、実行検証は未実施)
+
+# 第 14 回: 性能 — 既定ビルドが -O0、かつ BPM が FDTD 専用セットアップを実行していた
+
+プロファイリング (gprof + callgrind) からのボトルネック特定。
+
+- [x] **`CMAKE_BUILD_TYPE` 未指定 = 最適化なし (-O0) でビルドされていた** ✅ 対応済み
+  - 場所: `CMakeLists.txt` / `ReadMe.md` / `CLAUDE.md` / `AGENTS.md`
+  - 現状 (対応前): CMakeLists は既定のビルドタイプを設定しておらず、
+    ReadMe が案内する `cmake -S . -B build` には `-DCMAKE_BUILD_TYPE` が無い。
+    GCC/Clang はこの場合 **最適化フラグ無し (-O0)** でコンパイルするため、
+    利用者の既定ビルドは CI (Release) の 2.4〜2.7 倍遅いバイナリだった
+    (実測: fiber 0.76 → 0.28 秒、slab_polarization 51.5 → 21.1 秒)。
+  - 対応内容: 単一コンフィグジェネレータで `CMAKE_BUILD_TYPE` 未指定なら
+    Release を設定 (マルチコンフィグ = VS / Ninja Multi-Config は従来どおり)。
+    configure 時にその旨を message で表示する。
+  - 検証: `-O0` ビルドと Release ビルドの HDF5 出力が**ビット一致** (最大絶対差 0)。
+    速度差のみで数値は変わらない。
+- [x] **BPM が使わない FDTD 専用セットアップを毎回実行していた** ✅ 対応済み
+  - 場所: `sol/setup.c` (`setup_bpm()` 新設) / `include/obpm_prototype.h` /
+    `src/sol_Main.cpp` / `src/cuda_Main.cu` / `sol/setupDispersion.c`
+  - 現状 (対応前): `setup()` が Yee 格子の材料 ID ラスタライズ (`setupId`)・
+    分散性材料テーブル (`setupDispersion`)・吸収境界係数 (Mur/PML) を必ず構築して
+    いたが、これらを参照するのは FDTD 専用コード (`efeed` / `update*` / `setupMur*` /
+    `setupPml*` / `setup_vector`) だけで、BPM は一切使わない
+    (BPM の屈折率はセル中心で独自にラスタライズする)。
+    gprof では `setupDispersion` 16.7% + `ingeometry` 13.5% + `setupDispersion_id`
+    4.8% + `NodeE_c/NodeH_c` 7.4% と、実行時間の約半分を占めていた。
+  - 対応内容: BPM 用の `setup_bpm()` を新設し、時間刻み・材料係数・メッシュ係数・
+    DFT 係数のみを構築する。あわせて `setupDispersion` に「分散性材料 (type = 2) が
+    無ければ全格子走査をしない」早期終了を追加した (FDTD 側にも効く)。
+- [x] **遠方界用の閉曲面を obpm.out 不要時にも準備していた** ✅ 対応済み
+  - 場所: `sol/outputChars.c` / `include/obpm_prototype.h` / 各 main
+  - 現状 (対応前): `outputChars()` が常に `alloc_farfield` / `setup_farfield` を
+    実行していた。Surface 配列を読むのは `writeout` (obpm.out) と遠方界計算だけで、
+    `-no-fdtd-out` 指定時は誰も参照しない。
+  - 対応内容: `outputChars(FILE *, int farfield)` に引数を追加し、BPM の main は
+    `fdtd_out || IPlanewave` を渡す (FDTD 系 main は従来どおり 1)。
+  - 検証: obpm.out を書く場合の内容は **md5 一致** (バイト単位で不変)。
+    `-no-fdtd-out` 時の obpm.log の内容も不変 (差分は日時と CPU 時間のみ)。
+- 全体の検証:
+  - `data/` + `data/sample/` の**全 24 サンプル**で HDF5 の全データセットが
+    変更前と**数値完全一致** (最大絶対差 0)、obpm.out は md5 一致
+  - 決定論的な命令数 (valgrind callgrind, 同一 Release ビルド同士):
+    fiber 4.939e9 → 3.164e9 (**-36%**)、slab_polarization (200 步) 4.923e9 →
+    2.921e9 (**-41%**)。壁時計はコンテナのノイズが大きいため命令数で評価した
+  - ctest 10 本通過 (総実行時間 88 秒 → 12 秒)
+  - 試したが**採用しなかった**最適化: `adi_step` の作業バッファをステップ間で
+    使い回す案は命令数 -0.45%・ページフォルト同数で効果が無く、共有可変状態が
+    増えるだけなので撤回した
+  - CUDA / MPI 版は main の 1 行 (`setup_bpm()` / `outputChars` の引数) のみの
+    変更。今回の環境には CUDA/MPI ツールキットが無いためローカルでの
+    コンパイル検証はできておらず、CI の build-cuda / build-mpi で確認する
+
+# 第 15 回監査: モードソルバの数値的健全性 (半ベクトルの解析解検証ギャップから発覚)
+
+前回 (第 14 回) 以降の main の変更は Windows CUDA/MPI ビルド対応・MPI HDF5 の
+集団書き込み・CUDA 収束履歴の修正で、いずれも FDTD 側。マーカー走査はコード 0 件
+(既知の `wlsweep` CUDA 未対応の警告のみ)。キーワード × パスの対応表は
+CPU/CUDA で参照フィールドが完全一致することを確認した。
+
+## 検証ギャップ (監査で見つけた出発点)
+
+- [x] **半ベクトル (Stern) 差分が界面のある構造で解析解と比較されていなかった** ✅ 対応済み
+  - 現状 (対応前): `test_wabpm` の検証は「一様媒質でスカラーに帰着すること」のみ。
+    `data/slab_polarization.ofd` も界面での振幅比をコメントに書いてあるだけで、
+    TE/TM の実効屈折率を分散方程式と比べる定量検証が無かった。
+  - 対応内容: `tests/test_modes.cpp` に `test_slab_te_tm` を追加。対称スラブの
+    厳密解 (TE: u tan u = γa / TM: u tan u = (n1/n2)² γa) と比較する。
+    y 不変スラブを 2D で解いた際の y 閉じ込め分は、離散ラプラシアンの固有値
+    `-(4/dy²)sin²(π/(2(Ny+1)))` を差し引いて厳密に補正する。
+
+## この検証を通す過程で見つかった 3 つの不具合 (いずれも対応済み)
+
+- [x] **モードソルバの条件数が参照屈折率 `refindex` に依存し、スプリアス格子モードへ
+      収束することがあった** ✅ 対応済み
+  - 場所: `bpm/modes.cpp` (`wabpm_find_modes`)
+  - 現状 (対応前): 虚軸伝搬の増幅率は Cayley 写像 (1+aμ)/(1−aμ) で、|aμ|≫1 の
+    高周波格子モードを減衰させない (絶対値が 1 に漸近する)。屈折率項
+    k0²(n²−n0²) があるため、n0 をコアとクラッドの中間に取ると「x 方向 Nyquist
+    モード」の増幅率が導波モードを上回る。n1=2.0/n2=1.0 のスラブに
+    `refindex = 1.5` を与えると **neff² = −372 のスプリアス状態**に収束していた
+    (ユーザーには「modes : 0 / 1 converged」としか見えない)。
+  - 対応内容: `wabpm_find_modes` の内部で参照屈折率を境界 (クラッド) の屈折率に
+    取り直す (虚軸ステップ幅 a は呼び出し側の意図を保つよう dz を再計算)。
+    neff 自体は n0 に依らない量なので物理は変わらない。
+- [x] **導波判定のしきい値が「境界リング全体の最大値」で、コアが境界に接する構造を
+      棄却していた** ✅ 対応済み
+  - 場所: `bpm/modes.cpp` (`wabpm_guided_threshold`)
+  - 現状 (対応前): y 不変のスラブ導波路 (コアが y の上下端に達する) では
+    しきい値がコア屈折率になり、正しいモードまで放射状態と判定していた
+    (`data/slab_polarization.ofd` が該当)。
+  - 対応内容: **辺ごとに最大値を取り、その最小値**をしきい値とする。クラッドが
+    4 辺を囲むファイバ等では従来と同じ値になる。
+- [x] **虚軸伝搬の ADI 分離誤差が格子細分化で悪化していた (格子収束しない)** ✅ 対応済み
+  - 場所: `bpm/modes.cpp` (`wabpm_find_modes` の反復)
+  - 現状 (対応前): 虚軸ステップ幅は `a·mu_max ≈ 0.5` で決めており、格子に依らない。
+    ADI の分離誤差は O(a² Px Py) で Px ~ 1/dx² なので、**dx を細かくするほど
+    誤差が増える**。スラブ TE の neff は dx = 25nm で 1.6668、6.25nm で 1.6398 と
+    解析解 1.6742 から離れていった。
+  - 対応内容: 反復を 2 段階にした。段階 1 は従来のステップ幅 (速い選択)、
+    段階 2 は格子スケール `a = 1/(4/dx² + 4/dy²)` で仕上げる。高周波成分が確実に
+    減衰し、分離誤差も小さくなる。段階 1 が導波条件に届かなくても段階 2 を試す
+    (半ベクトルの高コントラスト構造は段階 1 でスプリアスに落ちてから復帰する)。
+  - 検証:
+    - **解析解との格子収束**: スラブ TE/TM の neff 誤差が
+      dx=25nm : TE 9.8e-4 / TM 1.6e-3 → dx=12.5nm : 2.5e-4 / 4.0e-4 →
+      dx=6.25nm : 6.1e-5 / 1.0e-4 と **O(dx²) で解析解に収束**する。
+      対応前は TM が全解像度で 0 本、TE は細かくするほど誤差が増えていた
+    - **偏波分離**: TE−TM = 0.31576 (解析解 0.31639) を再現 (誤差 6.3e-4)
+    - **既存の回帰**: fiber (3.122506e+02) 等 24 サンプル中、変化したのは
+      モード関連 4 件のみで、いずれも精度向上:
+      fiber_modes neff 1.447135 → **1.447140** (厳密解 1.447167)、
+      eta_1 0.999265 → **0.999709**、fiber_mode の出力電力 (モード整合励振の
+      電力保存) 9.999858e-01 → **9.999873e-01**、grin は 1.465062 で不変
+    - ctest 10 本通過 (総実行時間 10 → 17 秒)。CI に高コントラストスラブの
+      モード判定 (neff 1.673451 ± 3e-3) を追加
+    - CUDA 版はモード解析を CPU 側で行う構造のため、この修正が自動的に効く
+      (カーネル変更なし)

@@ -40,21 +40,42 @@ ADI 分離:
 typedef std::complex<double> cplx;
 
 // 偏波方向のステンシル重み (pol_dir = 1 なら Stern, 0 なら標準)
+//
+// 対角項 b は「-側の面の寄与 bm」と「+側の面の寄与 bp」に分けて持つ。
+// PML (複素座標伸長) 使用時は面ごとに異なる係数 gm/gp を掛けるため、
+// b をまとめてしまうと PML を適用できない。
+//   標準  : a = 1, bm = bp = -1, c = 1       (合計 b = -2)
+//   Stern : a = 2nm/(nc+nm), bm = -2nc/(nc+nm), c = 2np/(nc+np), bp = -2nc/(nc+np)
+// gm/gp が NULL のときは従来と同じ実数係数になる。
 static inline void stencil(int pol_dir, const cplx *n2, long i, long stride, long idx, long num,
-                           double *a, double *b, double *c)
+                           const cplx *gm, const cplx *gp,
+                           cplx *a, cplx *b, cplx *c)
 {
+	double wa, wbm, wbp, wc;
 	if (pol_dir) {
 		const double nc = n2[i].real();
 		const double nm = (idx > 0)       ? n2[i - stride].real() : nc;
 		const double np = (idx < num - 1) ? n2[i + stride].real() : nc;
-		*a = 2 * nm / (nc + nm);
-		*c = 2 * np / (nc + np);
-		*b = -((2 * nc / (nc + nm)) + (2 * nc / (nc + np)));
+		wa  = 2 * nm / (nc + nm);
+		wc  = 2 * np / (nc + np);
+		wbm = -(2 * nc / (nc + nm));
+		wbp = -(2 * nc / (nc + np));
 	}
 	else {
-		*a = 1;
-		*b = -2;
-		*c = 1;
+		wa  = 1;
+		wc  = 1;
+		wbm = -1;
+		wbp = -1;
+	}
+	if (gm != NULL) {
+		*a = wa * gm[idx];
+		*b = (wbm * gm[idx]) + (wbp * gp[idx]);
+		*c = wc * gp[idx];
+	}
+	else {
+		*a = wa;
+		*b = wbm + wbp;
+		*c = wc;
 	}
 }
 
@@ -84,8 +105,8 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 	for (long iy = 0; iy < Ny; iy++) {
 		for (long ix = 0; ix < Nx; ix++) {
 			const long i = ix + iy * Nx;
-			double a, b, c;
-			stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
+			cplx a, b, c;
+			stencil(poly, n2, i, Nx, iy, Ny, W->gym, W->gyp, &a, &b, &c);
 			cplx lap = b * E[i];
 			if (iy > 0)      lap += a * E[i - Nx];
 			else if (hasSy)  lap += (a * sgny) * E[i];   // 鏡像セル
@@ -102,8 +123,8 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 	for (long iy = 0; iy < Ny; iy++) {
 		for (long ix = 0; ix < Nx; ix++) {
 			const long i = ix + iy * Nx;
-			double a, b, c;
-			stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
+			cplx a, b, c;
+			stencil(polx, n2, i, 1, ix, Nx, W->gxm, W->gxp, &a, &b, &c);
 			cplx lap = b * T[i];
 			if (ix > 0)      lap += a * T[i - 1];
 			else if (hasSx)  lap += (a * sgnx) * T[i];   // 鏡像セル
@@ -126,8 +147,8 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 			cplx *e = &E[iy * Nx];
 			for (long ix = 0; ix < Nx; ix++) {
 				const long i = ix + iy * Nx;
-				double a, b, c;
-				stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
+				cplx a, b, c;
+				stencil(polx, n2, i, 1, ix, Nx, W->gxm, W->gxp, &a, &b, &c);
 				const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
 				const cplx sub  = dp * (a * idx2);
 				cplx       diag = 1.0 + dp * (b * idx2 + V2);
@@ -155,8 +176,8 @@ static void adi_step(const wabpm_params *W, cplx *E, const cplx *n2, cplx dp, cp
 		for (long ix = 0; ix < Nx; ix++) {
 			for (long iy = 0; iy < Ny; iy++) {
 				const long i = ix + iy * Nx;
-				double a, b, c;
-				stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
+				cplx a, b, c;
+				stencil(poly, n2, i, Nx, iy, Ny, W->gym, W->gyp, &a, &b, &c);
 				const cplx V2 = 0.5 * k0 * k0 * (n2[i] - n02);
 				const cplx sub  = dp * (a * idy2);
 				cplx       diag = 1.0 + dp * (b * idy2 + V2);
@@ -230,13 +251,13 @@ void wabpm_apply_P(const wabpm_params *W, const cplx *E, const cplx *n2, cplx *o
 	for (long iy = 0; iy < Ny; iy++) {
 		for (long ix = 0; ix < Nx; ix++) {
 			const long i = ix + iy * Nx;
-			double a, b, c;
-			stencil(polx, n2, i, 1, ix, Nx, &a, &b, &c);
+			cplx a, b, c;
+			stencil(polx, n2, i, 1, ix, Nx, W->gxm, W->gxp, &a, &b, &c);
 			cplx lapx = b * E[i];
 			if (ix > 0)      lapx += a * E[i - 1];
 			else if (hasSx)  lapx += (a * sgnx) * E[i];
 			if (ix < Nx - 1) lapx += c * E[i + 1];
-			stencil(poly, n2, i, Nx, iy, Ny, &a, &b, &c);
+			stencil(poly, n2, i, Nx, iy, Ny, W->gym, W->gyp, &a, &b, &c);
 			cplx lapy = b * E[i];
 			if (iy > 0)      lapy += a * E[i - Nx];
 			else if (hasSy)  lapy += (a * sgny) * E[i];

@@ -110,7 +110,7 @@ int main(int argc, char *argv[])
 	// output
 	if (io) {
 		// calculation and output
-		outputChars(fp_log);
+		outputChars(fp_log, 1);
 
 		// output filenames
 		monitor3(fp_log, FN_log, fn_out);

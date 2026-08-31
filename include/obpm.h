@@ -254,6 +254,8 @@ EXTERN struct {
 	int    launchIdx[BPM_MAX_LAUNCH_MODES];    // mode indices
 	double launchCoef[BPM_MAX_LAUNCH_MODES];   // superposition coefficients
 	char   ripfile[1024];     // refractive index profile file ("" = use geometry)
+	double pmlw;              // PML (complex coordinate stretching) width [m] (0 = off, use legacy absorber)
+	double pmlR0;             // PML target round-trip amplitude reflection at grazing incidence
 } BPM;                        // BPM (beam propagation method)
 
 typedef struct {

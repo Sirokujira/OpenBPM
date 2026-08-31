@@ -4,6 +4,19 @@ project(openBPM
   DESCRIPTION "A free and open source BPM solver"
   LANGUAGES C CXX)
 
+# ── 既定のビルドタイプ ───────────────────────────────────────────────
+# CMAKE_BUILD_TYPE 未指定だと GCC/Clang は最適化なし (-O0) でコンパイルする。
+# ReadMe が案内するビルド手順は -DCMAKE_BUILD_TYPE を渡さないため、
+# 何も指定しないと数値カーネルが 2.4〜2.7 倍遅いバイナリになっていた
+# (実測 : fiber 0.76 -> 0.28 秒、slab_polarization 51.5 -> 21.1 秒。
+#  結果は -O0 と Release でビット一致するので純粋な速度差)。
+# マルチコンフィグジェネレータ (Visual Studio / Ninja Multi-Config) は
+# CMAKE_CONFIGURATION_TYPES を使うのでここでは触らない。
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type (default: Release)" FORCE)
+    message(STATUS "CMAKE_BUILD_TYPE 未指定のため Release を使用します")
+endif()
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -568,6 +581,7 @@ endif()
 #   - test_wabpm  : BPM 伝搬カーネル (回折/エネルギー保存/吸収/曲げ/半ベクトル)
 #   - test_modes  : モードソルバ (LP01/LP11 の実効屈折率・直交性)
 #   - test_allset : P_Struct API (findModes/modeSuperposition/offset/tilt)
+#   - test_pml    : PML 吸収境界 (後方互換/境界反射/理論式との一致)
 # ---------------------------------------------------------------
 option(WITH_TESTS "Build unit tests" OFF)
 if (WITH_TESTS)
@@ -576,6 +590,7 @@ if (WITH_TESTS)
     add_executable(test_wabpm tests/test_wabpm.cpp bpm/wabpm.cpp)
     add_executable(test_modes tests/test_modes.cpp bpm/modes.cpp bpm/wabpm.cpp)
     add_executable(test_allset tests/test_allset.cpp bpm/modes.cpp bpm/wabpm.cpp)
+    add_executable(test_pml tests/test_pml.cpp bpm/wabpm.cpp)
     # スカラー近軸カーネルは C (float _Complex) のため、テストも C で書く。
     # MSVC の C コンパイラは C99 _Complex を扱えないため、カーネル本体と同様に
     # C++ (std::complex<float>) としてコンパイルする (bpm_prototype.h が切替)
@@ -585,7 +600,7 @@ if (WITH_TESTS)
     add_executable(test_fdbpm tests/test_fdbpm.c bpm/FDBPMpropagator.c)
     target_link_libraries(test_fdbpm PRIVATE ${MATH_LIB})
     target_link_libraries(test_allset PRIVATE Eigen3::Eigen)
-    foreach(t test_wabpm test_modes test_allset test_fdbpm)
+    foreach(t test_wabpm test_modes test_allset test_fdbpm test_pml)
         target_include_directories(${t} PRIVATE "${PROJECT_SOURCE_DIR}/include")
         if (OpenMP_CXX_FOUND)
             target_link_libraries(${t} PRIVATE OpenMP::OpenMP_CXX)
@@ -596,6 +611,7 @@ if (WITH_TESTS)
     add_test(NAME modes_unit COMMAND test_modes)
     add_test(NAME allset_unit COMMAND test_allset)
     add_test(NAME fdbpm_unit COMMAND test_fdbpm)
+    add_test(NAME pml_unit COMMAND test_pml)
 
     # ONN 光活性化関数 (TPA + powersweep) の結合テスト:
     # ソルバーを実際に走らせ、activation_curve.csv を平面波近似の解析解
