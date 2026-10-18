@@ -231,6 +231,13 @@ void wabpm_imagdist_step(const wabpm_params *W, cplx *E, const cplx *n2)
 	adi_step(W, E, n2, cplx(-a, 0.0), cplx(a, 0.0));
 }
 
+void wabpm_imagdist_step_be(const wabpm_params *W, cplx *E, const cplx *n2)
+{
+	// 後退オイラー : (1 - a Px)(1 - a Py) E' = E (陽的部分なし = dm = 0)
+	const double a = W->dz / (4 * W->k0 * W->n0);
+	adi_step(W, E, n2, cplx(-a, 0.0), cplx(0.0, 0.0));
+}
+
 void wabpm_apply_P(const wabpm_params *W, const cplx *E, const cplx *n2, cplx *out)
 {
 	const long Nx = W->Nx;

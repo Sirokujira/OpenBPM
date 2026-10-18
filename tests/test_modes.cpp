@@ -328,6 +328,83 @@ static void test_slab_te_tm()
     check_close("slab: TE-TM splitting", neff_te - neff_tm, te_ana - tm_ana, 2e-2);
 }
 
+// 方向性結合器 (同一 2 コア) の超モード (偶 / 奇)
+//
+// 弱く導波する高次モード (奇超モード) は mu = k0^2 (neff^2 - nclad^2) が小さいため、
+// 虚軸伝搬の選択段階を Cayley 写像 (1+a mu)/(1-a mu) で行うと高周波格子モードに
+// 負けてスプリアス状態に落ち、「1 / 2 converged」となっていた (data/fiber_coupler.ofd)。
+// 選択段階を後退オイラー 1/(1 - a mu) にした修正の回帰検出を兼ねる。
+//
+// 検証 (いずれも解析的な基準):
+//   1. 偶 / 奇の 2 本が見つかり、x について偶関数 / 奇関数であること (厳密な対称性)
+//   2. 超モードの平均 neff が孤立コア LP01 の厳密解と一致する (分裂は 1 次で対称)。
+//      許容 1e-4 : 孤立コアの離散化誤差 (smf テストで ~1e-5) + 分裂の 2 次項
+//   3. 結合長 Lc = lambda / (2 (n_even - n_odd)) が結合モード理論 (Snyder & Love)
+//        kappa = sqrt(2 Delta)/a * U^2/V^3 * K0(W D/a)/K1(W)^2,  Lc = pi/(2 kappa)
+//      と一致する。CMT は弱結合近似 (この構造で約 3% の差) なので許容 10%。
+//      BPM 伝搬から直接フィットした Lc (833.0um) とは 0.07% で一致することを確認済み
+static void test_coupler_supermodes()
+{
+    const double lambda = 1.55e-6;
+    const double k0 = 2 * M_PI / lambda;
+    const double ncore = 1.4504, nclad = 1.4440;
+    const double a = 3.0e-6, D = 8.0e-6;      // コア半径 / コア中心間隔
+    const int Nx = 120, Ny = 120;
+    const double dx = 40.0e-6 / Nx, dy = dx;
+    const long N = (long)Nx * Ny;
+
+    std::vector<cplx> n2((size_t)N);
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double x = coordm(ix, Nx, dx);
+            const double y = coordm(iy, Ny, dy);
+            const bool in = (std::hypot(x + 0.5 * D, y) < a) || (std::hypot(x - 0.5 * D, y) < a);
+            const double n = in ? ncore : nclad;
+            n2[ix + (long)iy * Nx] = cplx(n * n, 0.0);
+        }
+    }
+    const wabpm_params W = mode_params(Nx, Ny, dx, dy, lambda, nclad, ncore);
+    std::vector<cplx> modes((size_t)2 * N);
+    double neff[2] = {0, 0};
+    const int nFound = wabpm_find_modes(&W, n2.data(), 2, 20000, 1e-12, modes.data(), neff);
+    check_true("coupler: found even + odd supermodes", nFound == 2,
+               "nFound = " + std::to_string(nFound));
+    if (nFound < 2) return;
+
+    // x 方向の対称性 : E(-x) = +E(x) (偶) / -E(x) (奇)
+    double sym[2] = {0, 0};
+    for (int m = 0; m < 2; m++) {
+        const cplx *e = &modes[(size_t)m * N];
+        double sp = 0, sm = 0;
+        for (int iy = 0; iy < Ny; iy++) {
+            for (int ix = 0; ix < Nx; ix++) {
+                const cplx v = e[ix + (long)iy * Nx];
+                const cplx w = e[(Nx - 1 - ix) + (long)iy * Nx];
+                sp += std::norm(v + w);
+                sm += std::norm(v - w);
+            }
+        }
+        sym[m] = (m == 0) ? (sm / (sp + sm)) : (sp / (sp + sm));   // 期待と逆の成分の割合
+    }
+    check_true("coupler: mode 1 even / mode 2 odd in x", (sym[0] < 1e-6) && (sym[1] < 1e-6),
+               "残留 = " + std::to_string(sym[0]) + ", " + std::to_string(sym[1]));
+
+    const double n_iso = exact_lp_neff(0, a, ncore, nclad, lambda);
+    check_close("coupler: mean supermode neff = isolated LP01", 0.5 * (neff[0] + neff[1]), n_iso, 1e-4);
+
+    const double V = k0 * a * std::sqrt(ncore * ncore - nclad * nclad);
+    const double U = solve_lp_u(0, V);
+    const double Wv = std::sqrt(V * V - U * U);
+    const double Delta = (ncore * ncore - nclad * nclad) / (2 * ncore * ncore);
+    const double kb = bessel_ref_k(1, Wv);
+    const double kappa = std::sqrt(2 * Delta) / a * (U * U) / (V * V * V)
+                       * bessel_ref_k(0, Wv * D / a) / (kb * kb);
+    const double Lc_cmt = M_PI / (2 * kappa);
+    const double Lc = lambda / (2 * (neff[0] - neff[1]));
+    // check_close は絶対誤差なので比 Lc/Lc_cmt で比較する (相対 10%)
+    check_close("coupler: Lc / Lc(coupled-mode theory)", Lc / Lc_cmt, 1.0, 0.10);
+}
+
 int main()
 {
     std::printf("=== wabpm_find_modes unit tests ===\n");
@@ -335,6 +412,7 @@ int main()
     test_fmf_lp01_lp11();
     test_highcontrast_multimode();
     test_slab_te_tm();
+    test_coupler_supermodes();
 
     std::printf("\n%d failure(s).\n", g_failures);
     return g_failures == 0 ? 0 : 1;

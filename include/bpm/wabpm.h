@@ -46,6 +46,11 @@ void wabpm_step(const wabpm_params *W, std::complex<double> *E, const std::compl
 // 大きい (実効屈折率が高い) モードほど利得が大きく、反復でモードが析出する。
 void wabpm_imagdist_step(const wabpm_params *W, std::complex<double> *E, const std::complex<double> *n2);
 
+// 虚軸伝搬 1 ステップ (後退オイラー版) : (1 - a P) E' = E。
+// 増幅率 1/(1 - a mu) は高周波格子モードを必ず減衰させるため、
+// 大きな a でのモード選択に使う (wabpm_find_modes の段階 1)。
+void wabpm_imagdist_step_be(const wabpm_params *W, std::complex<double> *E, const std::complex<double> *n2);
+
 // ヘルムホルツ演算子 P = Lx + Ly + k0^2(n^2 - n0^2) の適用 (Rayleigh 商用)
 void wabpm_apply_P(const wabpm_params *W, const std::complex<double> *E,
                    const std::complex<double> *n2, std::complex<double> *out);

@@ -191,7 +191,16 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 			converged = 0;
 			int stall = 0;
 			for (int it = 0; it < maxIter; it++) {
-				wabpm_imagdist_step(Ws, E, n2);
+				// 段階 1 は後退オイラー (1 - aP)^-1、段階 2 は Cayley (1 - aP)^-1 (1 + aP)。
+				// 後退オイラーの増幅率 1/(1 - a mu) は高周波格子モード (mu << 0) を
+				// a が大きくても確実に減衰させ、mu の大きい順に増幅するので、
+				// 大きな a で速く選択してもスプリアスに落ちない。Cayley は |a mu| >> 1 で
+				// 増幅率の絶対値が 1 に漸近し、弱く導波する高次モード (方向性結合器の
+				// 奇超モード等) でスプリアス格子モードが勝ってしまう。
+				// 段階 2 は a が格子スケールで |a mu| <= 1 なので Cayley でも安全であり、
+				// 2 次精度で分離誤差の小さい固有ベクトルに仕上げる。
+				if (stage == 0) wabpm_imagdist_step_be(Ws, E, n2);
+				else            wabpm_imagdist_step(Ws, E, n2);
 				deflate(E, modes, m, N);
 				if (normalize(E, N) == 0.0) { stall = 1; break; }
 
