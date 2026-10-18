@@ -199,6 +199,32 @@ jobs:
                print "slab mode OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
 
+      # 傾いたビームの横変位 (広角検証) : 重心 <x>(z) の傾きを直線フィットし、
+      # 広角 (Pade(1,1)) は厳密値 tan(20deg)、近軸は sin(20deg) と比べる (±2.5%)。
+      # このメッシュ (dx = 0.125um, dz = 0.25um) の実測は -1.41% / -1.27% で、
+      # dx・dz を半分にすると -0.42% / -0.32% (2 次精度) に収束する。
+      # tan/sin = 1.064 なので、広角が近軸に退行すると tan 比 -7.2% となり検出できる。
+      - name: Smoke test — tilted beam walk-off (wide-angle vs paraxial)
+        run: |
+          mkdir -p /tmp/smoke-tilt && cd /tmp/smoke-tilt
+          cp "$GITHUB_WORKSPACE/data/tilt_wideangle.ofd" wide.ofd
+          sed 's/^wideangle = 1/wideangle = 0/' wide.ofd > parax.ofd
+          for c in wide parax; do
+            "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out $c.ofd
+            grep -q "normal end" obpm.log
+            mv time_series_data.h5 $c.h5
+          done
+          python3 - <<'EOF'
+          import h5py, numpy as np, math
+          th = math.radians(20)
+          for name, ref, label in (("wide", math.tan(th), "tan"), ("parax", math.sin(th), "sin")):
+              f = h5py.File(name + ".h5", "r")
+              s = np.polyfit(f["/trace/z"][:], f["/trace/centroid_x"][:], 1)[0]
+              err = s / ref - 1
+              assert abs(err) < 0.025, f"{name}: slope {s:.5f} vs {label}(20deg) {ref:.5f} (err {err*100:.2f}%)"
+              print(f"tilt {name} OK: slope {s:.5f} vs {label}(20deg) {ref:.5f} ({err*100:+.2f}%)")
+          EOF
+
       # PML 吸収境界 : 15 度傾けたビームを側壁へ入射させ、出口電力で判定する。
       # PML が効いていれば全電力が吸収されて output power = 3.085e-02
       # (入射比 7.67e-05)、効かず反射すると 3.949e+02 (0.982) に戻るため
@@ -395,6 +421,32 @@ jobs:
                if (err > 5e-4) { print "FAIL: neff " $NF " != 1.465066 (err " err ")"; exit 1 }
                print "GRIN mode OK: neff = " $NF; ok = 1 }
                END { if (!ok) { print "FAIL: neff line not found"; exit 1 } }' obpm.log
+
+      # 傾いたビームの横変位 (広角検証) : 重心 <x>(z) の傾きを直線フィットし、
+      # 広角 (Pade(1,1)) は厳密値 tan(20deg)、近軸は sin(20deg) と比べる (±2.5%)。
+      # このメッシュ (dx = 0.125um, dz = 0.25um) の実測は -1.41% / -1.27% で、
+      # dx・dz を半分にすると -0.42% / -0.32% (2 次精度) に収束する。
+      # tan/sin = 1.064 なので、広角が近軸に退行すると tan 比 -7.2% となり検出できる。
+      - name: Smoke test — tilted beam walk-off (wide-angle vs paraxial)
+        run: |
+          mkdir -p /tmp/smoke-tilt && cd /tmp/smoke-tilt
+          cp "$GITHUB_WORKSPACE/data/tilt_wideangle.ofd" wide.ofd
+          sed 's/^wideangle = 1/wideangle = 0/' wide.ofd > parax.ofd
+          for c in wide parax; do
+            "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out $c.ofd
+            grep -q "normal end" obpm.log
+            mv time_series_data.h5 $c.h5
+          done
+          python3 - <<'EOF'
+          import h5py, numpy as np, math
+          th = math.radians(20)
+          for name, ref, label in (("wide", math.tan(th), "tan"), ("parax", math.sin(th), "sin")):
+              f = h5py.File(name + ".h5", "r")
+              s = np.polyfit(f["/trace/z"][:], f["/trace/centroid_x"][:], 1)[0]
+              err = s / ref - 1
+              assert abs(err) < 0.025, f"{name}: slope {s:.5f} vs {label}(20deg) {ref:.5f} (err {err*100:.2f}%)"
+              print(f"tilt {name} OK: slope {s:.5f} vs {label}(20deg) {ref:.5f} ({err*100:+.2f}%)")
+          EOF
 
       # PML 吸収境界 : 15 度傾けたビームを側壁へ入射させ、出口電力で判定する。
       # PML が効いていれば全電力が吸収されて output power = 3.085e-02
