@@ -56,6 +56,21 @@
 
 float sqrf(float x) {return x*x;}
 
+// PML (複素座標伸長) 使用時の面ごとの ADI 係数。
+// P->pml* が NULL (PML 無効) なら ax/ay をそのまま返すので従来とビット一致。
+static inline floatcomplex axm_of(struct parameters *P, long ix) {
+  return P->pmlxm? P->ax*P->pmlxm[ix]: P->ax;
+}
+static inline floatcomplex axp_of(struct parameters *P, long ix) {
+  return P->pmlxp? P->ax*P->pmlxp[ix]: P->ax;
+}
+static inline floatcomplex aym_of(struct parameters *P, long iy) {
+  return P->pmlym? P->ay*P->pmlym[iy]: P->ay;
+}
+static inline floatcomplex ayp_of(struct parameters *P, long iy) {
+  return P->pmlyp? P->ay*P->pmlyp[iy]: P->ay;
+}
+
 // #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
 // __device__ double atomicAdd(double* address, double val) {
 //   unsigned long long int* address_as_ull = (unsigned long long int*)address;
@@ -84,10 +99,10 @@ void substep1a(struct parameters *P_global) {
       long i = ix + iy*P->Nx;
 
       P->E2[i] = P->E1[i];
-      if(ix != 0                                 ) P->E2[i] += (P->E1[i-1]     - P->E1[i])*P->ax;
-      if(ix != P->Nx-1 && (!yAntiSymm || ix != 0)) P->E2[i] += (P->E1[i+1]     - P->E1[i])*P->ax;
-      if(iy != 0                                 ) P->E2[i] += (P->E1[i-P->Nx] - P->E1[i])*P->ay*2.0f;
-      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) P->E2[i] += (P->E1[i+P->Nx] - P->E1[i])*P->ay*2.0f;
+      if(ix != 0                                 ) P->E2[i] += (P->E1[i-1]     - P->E1[i])*axm_of(P,ix);
+      if(ix != P->Nx-1 && (!yAntiSymm || ix != 0)) P->E2[i] += (P->E1[i+1]     - P->E1[i])*axp_of(P,ix);
+      if(iy != 0                                 ) P->E2[i] += (P->E1[i-P->Nx] - P->E1[i])*aym_of(P,iy)*2.0f;
+      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) P->E2[i] += (P->E1[i+P->Nx] - P->E1[i])*ayp_of(P,iy)*2.0f;
     }
   }
 }
@@ -108,14 +123,15 @@ void substep1b(struct parameters *P_global) {
     // Algorithm is taken from https://en.wikipedia.org/wiki/Tridiagonal_matrix_algorithm
     for(ix=0; ix<P->Nx; ix++) {
       long ib = ix + threadNum*P->Nx;
-      if     (ix == 0 && yAntiSymm) P->b[ib] = 1.0f             ;
-      else if(ix == 0             ) P->b[ib] = 1.0f +      P->ax;
-      else if(ix < P->Nx-1        ) P->b[ib] = 1.0f + 2.0f*P->ax;
-      else                          P->b[ib] = 1.0f +      P->ax;
+      // 対角 = 1 + (両隣の面係数の和)。PML 無効時は 1+2ax / 端は 1+ax で従来と一致
+      if     (ix == 0 && yAntiSymm) P->b[ib] = 1.0f;
+      else if(ix == 0             ) P->b[ib] = 1.0f + axp_of(P,ix);
+      else if(ix < P->Nx-1        ) P->b[ib] = 1.0f + axm_of(P,ix) + axp_of(P,ix);
+      else                          P->b[ib] = 1.0f + axm_of(P,ix);
 
       if(ix > 0) {
-        floatcomplex w   = -P->ax/P->b[ib-1];
-        P->b[ib]        += w*(ix == 1 && yAntiSymm? 0: P->ax);
+        floatcomplex w   = -axm_of(P,ix)/P->b[ib-1];
+        P->b[ib]        += w*(ix == 1 && yAntiSymm? 0: axp_of(P,ix-1));
         i                = ix + iy*P->Nx;
         P->E2[i]        -= w*P->E2[i-1];
       }
@@ -124,7 +140,7 @@ void substep1b(struct parameters *P_global) {
     for(ix=P->Nx-1; ix>=0 + yAntiSymm; ix--) {
       long ib = ix + threadNum*P->Nx;
       i = ix + iy*P->Nx;
-      P->E2[i] = (P->E2[i] + (ix == P->Nx-1? 0: P->ax*P->E2[i+1]))/P->b[ib];
+      P->E2[i] = (P->E2[i] + (ix == P->Nx-1? 0: axp_of(P,ix)*P->E2[i+1]))/P->b[ib];
     }
   }
 }
@@ -141,8 +157,8 @@ void substep2a(struct parameters *P_global) {
     for(ix=0; ix<P->Nx; ix++) {
       i = ix + iy*P->Nx;
 
-      if(iy != 0                                 ) P->E2[i] -= (P->E1[i-P->Nx] - P->E1[i])*P->ay;
-      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) P->E2[i] -= (P->E1[i+P->Nx] - P->E1[i])*P->ay;
+      if(iy != 0                                 ) P->E2[i] -= (P->E1[i-P->Nx] - P->E1[i])*aym_of(P,iy);
+      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) P->E2[i] -= (P->E1[i+P->Nx] - P->E1[i])*ayp_of(P,iy);
     }
   }
 }
@@ -166,14 +182,14 @@ void substep2b(struct parameters *P_global) {
   for(ix=0; ix<P->Nx; ix++) {
     for(iy=0; iy<P->Ny; iy++) {
       long ib = iy + threadNum*P->Ny;
-      if     (iy == 0 && xAntiSymm) P->b[ib] = 1.0f             ;
-      else if(iy == 0             ) P->b[ib] = 1.0f +      P->ay;
-      else if(iy < P->Ny-1        ) P->b[ib] = 1.0f + 2.0f*P->ay;
-      else                          P->b[ib] = 1.0f +      P->ay;
+      if     (iy == 0 && xAntiSymm) P->b[ib] = 1.0f;
+      else if(iy == 0             ) P->b[ib] = 1.0f + ayp_of(P,iy);
+      else if(iy < P->Ny-1        ) P->b[ib] = 1.0f + aym_of(P,iy) + ayp_of(P,iy);
+      else                          P->b[ib] = 1.0f + aym_of(P,iy);
 
       if(iy > 0) {
-        floatcomplex w   = -P->ay/P->b[ib-1];
-        P->b[ib]        += w*(iy == 1 && xAntiSymm? 0: P->ay);
+        floatcomplex w   = -aym_of(P,iy)/P->b[ib-1];
+        P->b[ib]        += w*(iy == 1 && xAntiSymm? 0: ayp_of(P,iy-1));
         i                = ix + iy*P->Nx;
         P->E2[i]        -= w*P->E2[i-P->Nx];
       }
@@ -182,7 +198,7 @@ void substep2b(struct parameters *P_global) {
     for(iy=P->Ny-1; iy>=0 + xAntiSymm; iy--) {
       long ib = iy + threadNum*P->Ny;
       i = ix + iy*P->Nx;
-      P->E2[i] = (P->E2[i] + (iy == P->Ny-1? 0: P->ay*P->E2[i+P->Nx]))/P->b[ib];
+      P->E2[i] = (P->E2[i] + (iy == P->Ny-1? 0: ayp_of(P,iy)*P->E2[i+P->Nx]))/P->b[ib];
       EfieldPowerThread += sqrf(CREALF(P->E2[i])) + sqrf(CIMAGF(P->E2[i]));
     }
   }
@@ -210,6 +226,11 @@ void applyMultiplier(struct parameters *P_global, long iz, struct debug *D) {
   long threadNum = 0;
   #endif
   struct parameters *P = P_global;
+  // PML 使用時 : ADI 演算子自体が境界で電力を吸収するため、電力簿記
+  // precisePower を実際の場の電力へ同期させる (そうしないと fieldCorrection が
+  // PML の吸収をそのまま打ち消してしまい、境界で反射したのと同じ結果になる)。
+  // TPA で precisePower を同率で減らしているのと同じ理由。
+  if(P->pmlxm) P->precisePower = P->EfieldPower;
   float fieldCorrection = sqrtf((float)P->precisePower/P->EfieldPower);
   float cosvalue = cosf(-P->twistPerStep*iz); // Minus is because we go from the rotated frame to the source frame
   float sinvalue = sinf(-P->twistPerStep*iz);

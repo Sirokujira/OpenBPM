@@ -32,6 +32,19 @@ void setupDispersion(void)
 	// setup dispersion id
 
 	numDispersionEx = numDispersionEy = numDispersionEz = 0;
+
+	// 分散性材料 (type = 2) が 1 つも無ければ全格子走査は不要 (早期終了)。
+	// setupDispersion_id は Yee 格子 3 成分を全走査するため、非分散モデル
+	// (BPM の入力はほぼ全てこれ) では丸ごと無駄になっていた。
+	int haveDispersion = 0;
+	for (int m = 0; m < NMaterial; m++) {
+		if (Material[m].type == 2) {
+			haveDispersion = 1;
+			break;
+		}
+	}
+	if (!haveDispersion) return;
+
 	setupDispersion_id(0);
 	//printf("%zd %zd %zd\n", numDispersionEx, numDispersionEy, numDispersionEz);
 

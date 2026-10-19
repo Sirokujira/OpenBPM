@@ -334,17 +334,31 @@ int plot2dBpm(void)
 		const double interval = readScalar(file, "/metadata/frame_interval", 0);
 		const double dz = readScalar(file, "/metadata/grid_dz", 0);
 		const int npage = (nf < BPM_FRAME_PAGES) ? nf : BPM_FRAME_PAGES;
+		/* 各フレームの z 位置はソルバーが記録した /field/frames_z を正とする。
+		   フレームは各ステップの伝搬「後」に記録されるため、
+		   z = Zn[0] + idx*interval*dz と計算すると 1 ステップぶん手前にずれる。
+		   frames_z が無い古いファイルだけ計算値 (伝搬後の位置) で代用する。 */
+		hsize_t nfz = 0;
+		double *framesZ = read1d(file, "/field/frames_z", &nfz);
+		if ((framesZ != NULL) && ((int)nfz != nf)) {
+			free(framesZ);
+			framesZ = NULL;
+		}
 		const double x0 = (nx == Nx) ? Xn[0] : 0;
 		const double x1 = (nx == Nx) ? Xn[Nx] : nx;
 		const double y0 = (ny == Ny) ? Yn[0] : 0;
 		const double y1 = (ny == Ny) ? Yn[Ny] : ny;
 		for (int p = 0; p < npage; p++) {
-			/* 先頭と末尾を必ず含む等間隔サンプリング */
-			const int idx = (npage > 1) ? (int)((double)p * (nf - 1) / (npage - 1)) : 0;
+			/* 先頭と末尾を必ず含む等間隔サンプリング (四捨五入で偏りを避ける) */
+			const int idx = (npage > 1) ? (int)(((double)p * (nf - 1) / (npage - 1)) + 0.5) : 0;
 			char title[BUFSIZ];
-			if ((interval > 0) && (dz > 0)) {
+			if (framesZ != NULL) {
 				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  z = %.6e [m] (frame %d/%d)",
-				        Zn[0] + (idx * interval * dz), idx + 1, nf);
+				        framesZ[idx], idx + 1, nf);
+			}
+			else if ((interval > 0) && (dz > 0)) {
+				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB]  z = %.6e [m] (frame %d/%d)",
+				        Zn[0] + (((idx * interval) + 1) * dz), idx + 1, nf);
 			}
 			else {
 				sprintf(title, "BPM snapshot |E(x,y)|^2 [dB] (frame %d/%d)", idx + 1, nf);
@@ -356,6 +370,7 @@ int plot2dBpm(void)
 		printf("BPM: snapshots %d frames (%d x %d), plotted %d page(s)\n",
 		       nf, ny, nx, npage);
 		free(frames);
+		if (framesZ != NULL) free(framesZ);
 	}
 
 	/* ── z 伝搬に沿ったスカラー推移 (/trace) ──

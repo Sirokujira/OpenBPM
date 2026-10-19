@@ -175,6 +175,42 @@ double factorMur(double d, id_t m)
 
 
 // setup
+// BPM 専用のセットアップ (obpm / obpm_cuda 用)
+//
+// BPM は FDTD の時間更新を一切行わないため、setup() のうち
+//   - Yee 格子の材料 ID (setupId / setupId_surface / *_vector)
+//   - 分散性材料テーブル (setupDispersion)
+//   - 吸収境界 (Mur / PML) の係数配列
+// は使われない (これらの配列を参照するのは efeed / updateE*/H* / setupMur* /
+// setupPml* / setup_vector といった FDTD 専用コードだけ)。
+// BPM の屈折率分布はセル中心で独自にラスタライズする (solve_bpm の bpmIdPoint)。
+//
+// 領域が大きいと ID ラスタライズと分散走査だけで実行時間の半分近くを占めるため、
+// BPM ではこれらを行わない。obpm.out (FDTD 形式) の内容は変わらない
+// (writeout が書くのは DFT 配列・Surface・給電情報で、ID 配列は含まない)。
+void setup_bpm(void)
+{
+	// time step (default value)
+	if (Dt < 1e-20) {
+		setup_timestep();
+	}
+
+	// pulse width (default value)
+	if (Tw < 1e-20) {
+		setup_pulsewidth();
+	}
+
+	// material factor (材料数ぶんの小さなテーブル)
+	setup_material();
+
+	// mesh factor
+	setup_mesh();
+
+	// setup DFT factor
+	setupDft();
+}
+
+
 void setup(void)
 {
 	// time step (default value)

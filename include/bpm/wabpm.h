@@ -25,6 +25,16 @@ struct wabpm_params {
 	//   0 = なし (Dirichlet), 1 = 対称 (E[-1] = E[0]), 2 = 反対称 (E[-1] = -E[0])
 	int    symx;         // x 方向 (ix = 0 側)
 	int    symy;         // y 方向 (iy = 0 側)
+	// PML (複素座標伸長) : 面ごとの伸長係数の逆数。NULL なら PML 無効。
+	//   s(x) = 1 - i*sigma(x) に対し
+	//   gxm[ix] = 1/(s(Xc[ix]) * s(Xn[ix]))    (ix-1 側の面)
+	//   gxp[ix] = 1/(s(Xc[ix]) * s(Xn[ix+1]))  (ix+1 側の面)
+	// 横方向ラプラシアンの各面の項にこれを掛けると、PML 層内で外向き波が
+	// exp(-|kx| * sigma * 距離) で減衰し、境界反射が抑えられる。
+	const std::complex<double> *gxm = nullptr;
+	const std::complex<double> *gxp = nullptr;
+	const std::complex<double> *gym = nullptr;
+	const std::complex<double> *gyp = nullptr;
 };
 
 // 1 ステップ伝搬 (E, n2 は Nx*Ny, 行優先 [iy*Nx+ix])
@@ -35,6 +45,11 @@ void wabpm_step(const wabpm_params *W, std::complex<double> *E, const std::compl
 // (1 - a P) E' = (1 + a P) E, a = dz/(4 k0 n0) を解く。P の固有値が
 // 大きい (実効屈折率が高い) モードほど利得が大きく、反復でモードが析出する。
 void wabpm_imagdist_step(const wabpm_params *W, std::complex<double> *E, const std::complex<double> *n2);
+
+// 虚軸伝搬 1 ステップ (後退オイラー版) : (1 - a P) E' = E。
+// 増幅率 1/(1 - a mu) は高周波格子モードを必ず減衰させるため、
+// 大きな a でのモード選択に使う (wabpm_find_modes の段階 1)。
+void wabpm_imagdist_step_be(const wabpm_params *W, std::complex<double> *E, const std::complex<double> *n2);
 
 // ヘルムホルツ演算子 P = Lx + Ly + k0^2(n^2 - n0^2) の適用 (Rayleigh 商用)
 void wabpm_apply_P(const wabpm_params *W, const std::complex<double> *E,

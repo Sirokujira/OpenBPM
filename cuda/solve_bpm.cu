@@ -314,6 +314,41 @@ static void bpmNSlice(floatcomplex *dst, const floatcomplex *n_mat, int64_t iz)
 }
 
 
+// ============================================================
+// PML (複素座標伸長) の係数構築 (CPU 版 sol/solve_bpm.cpp と同一)
+//
+// 位相規約 exp(-i k z) に対し s(x) = 1 - i*sigma(x) と伸長すると、
+// 外向きの横方向波は PML 層内で |E| ~ exp(-|kx| ∫sigma dx) で減衰する。
+// sigma(d) = smax*(d/W)^m (m = 3), smax は「かすめ入射 (kx = k0*n0) の
+// 往復振幅反射率が R0」から smax = -(m+1)*ln(R0)/(2*k0*n0*W) と決める。
+// 対称境界側は物理境界ではないので PML を置かない。
+// ============================================================
+static double bpmPmlSigma(double u, double lo, double hi, double Wpml, double smax, int symLow)
+{
+	const double m = 3.0;
+	double d = 0;
+	if (!symLow && (u < lo)) d = lo - u;
+	else if (u > hi)         d = u - hi;
+	if (d <= 0) return 0;
+	if (d > Wpml) d = Wpml;
+	return smax * pow(d / Wpml, m);
+}
+
+static void bpmPmlAxis(const double *node, const double *cent, int N,
+                       double Wpml, double smax, int symLow,
+                       std::complex<double> *gm, std::complex<double> *gp)
+{
+	const double lo = node[0] + Wpml;
+	const double hi = node[N] - Wpml;
+	for (int i = 0; i < N; i++) {
+		const std::complex<double> sc(1.0, -bpmPmlSigma(cent[i],     lo, hi, Wpml, smax, symLow));
+		const std::complex<double> sm(1.0, -bpmPmlSigma(node[i],     lo, hi, Wpml, smax, symLow));
+		const std::complex<double> sp(1.0, -bpmPmlSigma(node[i + 1], lo, hi, Wpml, smax, symLow));
+		gm[i] = 1.0 / (sc * sm);
+		gp[i] = 1.0 / (sc * sp);
+	}
+}
+
 void solve_bpm(int io, double *tdft, FILE *fp)
 {
 	// HDF5ファイルの作成
@@ -542,6 +577,53 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex)); // Output refractive index(Array)
 	P->multiplier = (float *)malloc((P->Nx * P->Ny) * sizeof(float));
 
+	// --- PML (pml = <width> [<R0>]) の係数構築 ---
+	// 未指定なら全ポインタが NULL のままで、カーネルは従来の ax/ay を使う
+	const int usePml = (BPM.pmlw > 0);
+	P->pmlxm = P->pmlxp = P->pmlym = P->pmlyp = NULL;
+	std::complex<double> *pmlgxm = NULL, *pmlgxp = NULL, *pmlgym = NULL, *pmlgyp = NULL;
+	if (usePml) {
+		const double m_grade = 3.0;
+		const double Lx_dom = Xn[Nx] - Xn[0];
+		const double Ly_dom = Yn[Ny] - Yn[0];
+		if ((2 * BPM.pmlw >= Lx_dom) || (2 * BPM.pmlw >= Ly_dom)) {
+			sprintf(str, "*** warning : pml width %.3e [m] is too large for the domain"
+			             " (%.3e x %.3e [m]).", BPM.pmlw, Lx_dom, Ly_dom);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
+		const double smax = -(m_grade + 1) * log(BPM.pmlR0) / (2 * k0 * P->n_0 * BPM.pmlw);
+		pmlgxm = new std::complex<double>[Nx];
+		pmlgxp = new std::complex<double>[Nx];
+		pmlgym = new std::complex<double>[Ny];
+		pmlgyp = new std::complex<double>[Ny];
+		bpmPmlAxis(Xn, Xc, Nx, BPM.pmlw, smax, BPM.symx, pmlgxm, pmlgxp);
+		bpmPmlAxis(Yn, Yc, Ny, BPM.pmlw, smax, BPM.symy, pmlgym, pmlgyp);
+		P->pmlxm = (floatcomplex *)malloc((size_t)Nx * sizeof(floatcomplex));
+		P->pmlxp = (floatcomplex *)malloc((size_t)Nx * sizeof(floatcomplex));
+		P->pmlym = (floatcomplex *)malloc((size_t)Ny * sizeof(floatcomplex));
+		P->pmlyp = (floatcomplex *)malloc((size_t)Ny * sizeof(floatcomplex));
+		for (int ix = 0; ix < Nx; ix++) {
+			floatcomplex vm = {(float)pmlgxm[ix].real(), (float)pmlgxm[ix].imag()};
+			floatcomplex vp = {(float)pmlgxp[ix].real(), (float)pmlgxp[ix].imag()};
+			P->pmlxm[ix] = vm;
+			P->pmlxp[ix] = vp;
+		}
+		for (int iy = 0; iy < Ny; iy++) {
+			floatcomplex vm = {(float)pmlgym[iy].real(), (float)pmlgym[iy].imag()};
+			floatcomplex vp = {(float)pmlgyp[iy].real(), (float)pmlgyp[iy].imag()};
+			P->pmlym[iy] = vm;
+			P->pmlyp[iy] = vp;
+		}
+		const int ncx = (int)(BPM.pmlw / P->dx + 0.5);
+		const int ncy = (int)(BPM.pmlw / P->dy + 0.5);
+		sprintf(str, "pml : width = %.3e [m] (%d x %d cells), R0 = %.1e,"
+		             " sigma_max = %.3f (legacy absorber disabled)",
+		        BPM.pmlw, ncx, ncy, BPM.pmlR0, smax);
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
+
 	// 初期電界 (ガウシアンビーム) と端部吸収体 (multiplier) の設定
 	// - ビームウェスト : 入力 (beam =) を優先し、未指定なら領域幅の 1/4
 	// - ビーム中心    : 入力 (beam = w0 x0 y0) > 給電点 (feed) > 領域中心
@@ -585,7 +667,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				P->E1[i] = e;
 				power += (double)amp * amp;
 				double dist = MAX(0.0, MAX(fabs(Xc[ix] - xmid) - xEdge, fabs(Yc[iy] - ymid) - yEdge));
-				P->multiplier[i] = (float)exp(-P->dz * dist * dist * alpha);
+				// PML 使用時は振幅吸収体を掛けない (境界吸収は PML が担当する)
+				P->multiplier[i] = usePml ? 1.0f : (float)exp(-P->dz * dist * dist * alpha);
 			}
 		}
 		P->precisePower = power;
@@ -1019,6 +1102,11 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		W.pol = BPM.pol;
 		W.symx = BPM.symx;
 		W.symy = BPM.symy;
+		// PML (複素座標伸長) : 近軸パスと同じ係数を拡張パスにも渡す
+		W.gxm = pmlgxm;
+		W.gxp = pmlgxp;
+		W.gym = pmlgym;
+		W.gyp = pmlgyp;
 
 		wabpm_cplx *Ed = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
 		wabpm_cplx *n2 = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
@@ -1722,6 +1810,11 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	free(P->n_out);
 	free(P->n_in);
 	free(P->multiplier);
+	if (P->pmlxm != NULL) free(P->pmlxm);
+	if (P->pmlxp != NULL) free(P->pmlxp);
+	if (P->pmlym != NULL) free(P->pmlym);
+	if (P->pmlyp != NULL) free(P->pmlyp);
+	if (pmlgxm != NULL) { delete[] pmlgxm; delete[] pmlgxp; delete[] pmlgym; delete[] pmlgyp; }
 	free(n_mat);
 	free(bpmNIn);
 	free(bpmNZ);
