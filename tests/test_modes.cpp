@@ -328,6 +328,87 @@ static void test_slab_te_tm()
     check_close("slab: TE-TM splitting", neff_te - neff_tm, te_ana - tm_ana, 2e-2);
 }
 
+// 対称スラブの奇モード (TE1/TM1) : -u cot(u) = c * gamma*a,  u in (pi/2, min(pi, V))
+static double slab_odd_neff_analytic(double k0, double n1, double n2, double a, int tm)
+{
+    const double V = k0 * a * std::sqrt(n1 * n1 - n2 * n2);
+    const double c = tm ? ((n1 * n1) / (n2 * n2)) : 1.0;
+    auto f = [&](double u) {
+        return -u / std::tan(u) - c * std::sqrt(std::max(0.0, V * V - u * u));
+    };
+    double lo = 0.5 * M_PI + 1e-9, hi = std::min(M_PI, V) - 1e-9;
+    for (int it = 0; it < 200; it++) {
+        const double mid = 0.5 * (lo + hi);
+        if (f(mid) > 0) hi = mid; else lo = mid;
+    }
+    const double kap = 0.5 * (lo + hi) / a;
+    return std::sqrt(n1 * n1 - (kap / k0) * (kap / k0));
+}
+
+// 2 モードスラブの高次モード (TE1 / TM1 = x について奇) の分散方程式との比較
+//
+// 半ベクトル (TM) の演算子は非エルミートだが、Gram-Schmidt の通常内積での
+// 減次 (deflation) でも高次モードが正しく得られることを確かめる。
+// y 方向は Ly = 2um の Dirichlet で、y に節を持つ「基本モードの複製」が x 奇モードより
+// 先に並ぶため、x の偶奇と y の節数でモードを同定する (y 基本モードは厳密に補正)。
+// 許容誤差 : dx = 25nm での実測 TE1 +1.3e-3 / TM1 +1.7e-3 で、dx を半分にすると
+// 1/4 (O(dx^2)) になることを確認済み。
+// 回帰検出 : 格子スケールの仕上げを c = 1 だけで行うと細かい格子 (dx = 6.25nm) で
+// TM1 が反復上限までに収束しなかった (段階 2 を c = 16 にして解消)。
+static void test_slab_higher_order()
+{
+    const double lambda = 1.55e-6;
+    const double k0 = 2 * M_PI / lambda;
+    const double n1 = 2.0, n2 = 1.0, a = 0.4e-6;     // V = 2.81 (各偏波 2 モード)
+    const int Nx = 320, Ny = 16;
+    const double dx = 8.0e-6 / Nx, dy = 2.0e-6 / Ny;
+    const long N = (long)Nx * Ny;
+    std::vector<cplx> n2m((size_t)N);
+    for (int iy = 0; iy < Ny; iy++) {
+        for (int ix = 0; ix < Nx; ix++) {
+            const double n = (std::fabs(coordm(ix, Nx, dx)) < a) ? n1 : n2;
+            n2m[ix + (long)iy * Nx] = cplx(n * n, 0.0);
+        }
+    }
+    const double sy = std::sin(M_PI / (2 * (Ny + 1)));
+    const double lam_y = -(4.0 / (dy * dy)) * sy * sy;
+
+    for (int pol = 1; pol <= 2; pol++) {
+        wabpm_params W = mode_params(Nx, Ny, dx, dy, lambda, n2, n1);
+        W.pol = pol;
+        const int nm = 5;
+        std::vector<cplx> md((size_t)nm * N);
+        std::vector<double> ne(nm);
+        const int nf = wabpm_find_modes(&W, n2m.data(), nm, 40000, 1e-12, md.data(), ne.data());
+        double got = 0;
+        for (int m = 0; m < nf; m++) {
+            const cplx *e = &md[(size_t)m * N];
+            double sp = 0, sm = 0, yp = 0, ym = 0;
+            for (int iy = 0; iy < Ny; iy++) {
+                for (int ix = 0; ix < Nx; ix++) {
+                    const cplx v = e[ix + (long)iy * Nx];
+                    const cplx w = e[(Nx - 1 - ix) + (long)iy * Nx];
+                    const cplx u = e[ix + (long)(Ny - 1 - iy) * Nx];
+                    sp += std::norm(v + w); sm += std::norm(v - w);
+                    yp += std::norm(v + u); ym += std::norm(v - u);
+                }
+            }
+            // x で奇・y で偶。y の基本モード (節なし) は x 奇モードの中で最も neff が高い
+            if ((sm > sp) && (yp > ym)) {
+                got = std::sqrt(ne[m] * ne[m] - lam_y / (k0 * k0));
+                break;
+            }
+        }
+        const char *tag = (pol == 1) ? "TM1" : "TE1";
+        check_true(std::string("slab2: ") + tag + " (x-odd) found", got > 0,
+                   "nFound = " + std::to_string(nf));
+        if (got > 0) {
+            check_close(std::string("slab2: ") + tag + " neff (dispersion eq.)", got,
+                        slab_odd_neff_analytic(k0, n1, n2, a, pol == 1), 3e-3);
+        }
+    }
+}
+
 // 方向性結合器 (同一 2 コア) の超モード (偶 / 奇)
 //
 // 弱く導波する高次モード (奇超モード) は mu = k0^2 (neff^2 - nclad^2) が小さいため、
@@ -413,6 +494,7 @@ int main()
     test_highcontrast_multimode();
     test_slab_te_tm();
     test_coupler_supermodes();
+    test_slab_higher_order();
 
     std::printf("\n%d failure(s).\n", g_failures);
     return g_failures == 0 ? 0 : 1;

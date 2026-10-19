@@ -134,14 +134,25 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 	}
 	W = &Wm;
 
-	// 虚軸ステップ幅 : 段階 1 (選択) は呼び出し側の指定、
-	// 段階 2 (仕上げ) は格子スケール a = 1/(4/dx^2 + 4/dy^2)
+	// 虚軸ステップ幅 : 段階 1 (選択) は呼び出し側の指定、段階 2・3 (仕上げ) は
+	// 格子スケール a = c/(4/dx^2 + 4/dy^2)。
+	//
+	// Cayley 写像の最も負の固有値での増幅率は |(1-c)/(1+c)| < 1 なので c > 1 でも
+	// 高周波格子モードは減衰するが、ADI 分離誤差は a^2 (= c^2 dx^4) に比例して増える。
+	// 一方 c = 1 だけで仕上げると必要な反復数が dx^-2 で増え、細かい格子では
+	// 弱導波の高次モード (2 モードスラブの TM1) が反復上限 (4 万回) までに収束せず
+	// 見つからなかった (c = 2 でも不可、c >= 4 で可)。
+	// そこで仕上げを 2 段に分け、段階 2 は c = 16 で速く収束させ、段階 3 は c = 1 で
+	// 分離誤差を取り除く (段階 3 はほぼ収束済みの状態から始まるので短く済む)。
 	const wabpm_params Wsel = Wm;
 	const double a_sel = Wsel.dz / (4 * Wsel.k0 * Wsel.n0);
-	const double a_pol = 1.0 / ((4.0 / (Wsel.dx * Wsel.dx)) + (4.0 / (Wsel.dy * Wsel.dy)));
+	const double a_grid = 1.0 / ((4.0 / (Wsel.dx * Wsel.dx)) + (4.0 / (Wsel.dy * Wsel.dy)));
+	const double c_fast = 16.0;
+	wabpm_params Wfast = Wsel;
+	Wfast.dz = std::min(a_sel, c_fast * a_grid) * 4 * Wsel.k0 * Wsel.n0;
 	wabpm_params Wpol = Wsel;
-	Wpol.dz = a_pol * 4 * Wsel.k0 * Wsel.n0;
-	const int usePolish = (a_pol < a_sel);
+	Wpol.dz = a_grid * 4 * Wsel.k0 * Wsel.n0;
+	const int usePolish = (a_grid < a_sel);
 
 	cplx *E = new cplx[N];
 	cplx *work = new cplx[N];
@@ -173,20 +184,21 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 		double v_prev = 0.0;
 		int converged = 0;
 
-		// 2 段階で反復する。
-		//  段階 1 (選択)  : 呼び出し側が指定した虚軸ステップ幅。1 ステップの利得が
-		//                   大きく速いが、|a*mu| >> 1 の高周波格子モードを減衰させない
-		//                   (Cayley 写像の絶対値が 1 に漸近する) ため、高コントラスト
-		//                   構造ではスプリアス状態に落ちることがある。
-		//  段階 2 (仕上げ): 格子スケール a = 1/(4/dx^2 + 4/dy^2) で反復する。高周波成分は
+		// 3 段階で反復する (段階 2・3 は「仕上げ」を速い段と精密な段に分けたもの)。
+		//  段階 1 (選択)  : 呼び出し側が指定した (大きな) 虚軸ステップ幅で後退オイラー。
+		//                   1 ステップの利得が大きく速い。高周波格子モードは確実に減衰する
+		//                   が、後退オイラーは a について 1 次精度で分離誤差が大きい。
+		//  段階 2 (速い仕上げ): 格子スケールの c = 16 倍で反復し、高周波成分を減衰させつつ
+		//                   速く収束させる (分離誤差は a^2 に比例してまだ残る)。
+		//  段階 3 (仕上げ): 格子スケール a = 1/(4/dx^2 + 4/dy^2) で反復する。高周波成分は
 		//                   確実に減衰し、ADI 分離誤差 O(a^2 Px Py) も小さくなるため、
 		//                   得られる neff が格子細分化で解析解に収束するようになる
 		//                   (段階 1 のみだと dx を半分にすると誤差が増えていた)。
-		// 段階 1 が導波条件に届かなくても段階 2 を試す (半ベクトルの高コントラスト
-		// 構造は段階 1 でスプリアスに落ちるが、段階 2 で正しいモードに復帰する)。
-		for (int stage = 0; stage < 2; stage++) {
-			const wabpm_params *Ws = (stage == 0) ? &Wsel : &Wpol;
-			if ((stage == 1) && !usePolish) break;
+		// 段階 1 が導波条件に届かなくても段階 2 以降を試す (仕上げ段で導波モードへ
+		// 収束し直すことがあるため、採否は最終段の結果で判定する)。
+		for (int stage = 0; stage < 3; stage++) {
+			const wabpm_params *Ws = (stage == 0) ? &Wsel : ((stage == 1) ? &Wfast : &Wpol);
+			if ((stage >= 1) && !usePolish) break;
 			// 段階 2 は前段の結果を初期値として引き継ぐ
 			converged = 0;
 			int stall = 0;
@@ -221,7 +233,7 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 				v_prev = v;
 			}
 			if (stall && !usePolish) break;
-			if (stall && (stage == 1)) break;
+			if (stall && (stage >= 1)) break;
 		}
 		// 導波条件を満たすモードのみ採用する
 		if (!converged || (v_prev <= v0)) break;
