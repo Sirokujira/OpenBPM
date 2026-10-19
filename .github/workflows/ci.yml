@@ -67,6 +67,20 @@ jobs:
           awk '/^-1 /{n++} END { if (n < 6) { print "FAIL: only " n " page(s) in ev.ev2"; exit 1 }
                print "post pages OK: " n }' ev.ev2
 
+      # obpm_post の伝搬スナップショット (/field/frames) ページ。タイトルの z は
+      # /field/frames_z (各ステップの伝搬「後」の位置) と一致すること。
+      # 以前は idx*interval*dz で計算して 1 ステップ手前 (0, 30um, ...) を表示していた。
+      - name: Smoke test — post processor snapshots (frames z labels)
+        run: |
+          mkdir -p /tmp/smoke-frames && cd /tmp/smoke-frames
+          sed 's/^abc = 0/frames = 30\nabc = 0/' "$GITHUB_WORKSPACE/data/sample/fiber.ofd" > f.ofd
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 f.ofd
+          "$GITHUB_WORKSPACE/bin/obpm_post" -n 2 f.ofd | tee post.log
+          grep -q "BPM: snapshots 7 frames" post.log
+          grep -aq "z = 1.000000e-06 \[m\] (frame 1/7)" ev.ev2
+          grep -aq "z = 1.810000e-04 \[m\] (frame 7/7)" ev.ev2
+          echo "snapshot labels OK"
+
       # 1 行目のプログラム名の受理範囲 (GUI 連携の回帰防止)
       # OpenFDTD-X が書き出す .ofd は "OpenFDTD" ヘッダなので受け付ける必要がある。
       # 未知の名前は実際に読んだ名前を添えて弾くこと。
