@@ -1021,3 +1021,16 @@ CPU/CUDA で参照フィールドが完全一致することを確認した。
     post/readhdf5.c の 2 件を再現。後者は CI では最初のエラーで止まり未表示だった)。
     fiber の output power 3.122506e+02 不変、obpm_post のページ数不変、ctest 10 本通過。
     mpi/solve.c は MPI 環境が手元に無いため CI の build-mpi で確認する
+- [x] **GCC 15 の omp.h が extern "C" の内側で include されてエラーになった** ✅ 対応済み
+  - 場所: `include/obpm.h`
+  - 現状: Gline の修正後の CI で、CI ランナーの GCC が 15 であることが判明。
+    `obpm.h` は `extern "C" {` を開いた後で標準ヘッダと `<omp.h>` を include しており、
+    GCC 15 の omp.h は C++ でテンプレートを宣言するため "template with C linkage" で
+    C++ ソース (bpm/initfield.cpp ほか) のコンパイルが失敗した。
+  - 対応内容: `extern "C" {` を include 群の後ろへ移した (標準ヘッダは自前で C++ に
+    対応している。ほかのヘッダ ev.h / obpm_prototype.h / bpm_prototype.h は
+    extern "C" の内側で include していないことを確認)。
+  - 検証: 手元の GCC 13 / 14 の omp.h にはテンプレートが無く直接は再現できないため、
+    テンプレートを含む擬似 omp.h を -I で先に読ませて C++ で obpm.h をコンパイルし、
+    修正前は CI と同じ "template with C linkage"、修正後は通過することを確認。
+    GCC 14 (g++-14) でフルビルドしてエラー 0 件。ctest 10 本通過、fiber 不変

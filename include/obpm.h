@@ -2,10 +2,6 @@
 #ifndef _OBPM_H_
 #define _OBPM_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,6 +14,14 @@ extern "C" {
 
 #ifdef _OPENMP
 #include <omp.h>
+#endif
+
+// extern "C" は標準/OpenMP ヘッダの include より後ろで開く。
+// GCC 15 の omp.h は C++ ではテンプレートを宣言するため、extern "C" の内側で
+// include すると "template with C linkage" でコンパイルエラーになる
+// (標準ヘッダは自前で C++ に対応しているので外側に置いて問題ない)。
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 #define PROGRAM "OpenBPM"
