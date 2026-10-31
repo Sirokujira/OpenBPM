@@ -64,7 +64,7 @@ LP モード、GI 自己集束ピッチ、チルト変位) は `.claude/rules/ph
 | `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
 | `post/postbpm.c` | obpm_post の BPM 可視化 (/field 等高線 + /trace 折れ線グラフ) |
 | `tests/` | ctest 10 本 (単体: wabpm/modes/allset/fdbpm/pml、結合: ONN/モードビート/波長掃引) |
-| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証 (`check_activation.sh`) |
+| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証 (`check_activation.sh`, `check_taper_twist.py`) |
 | `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |
 
 出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/Iyz`,
