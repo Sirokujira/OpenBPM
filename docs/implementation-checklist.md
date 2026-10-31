@@ -1002,3 +1002,22 @@ CPU/CUDA で参照フィールドが完全一致することを確認した。
     最終断面は 90·(N−1)/N 度 (N = 200 で 89.55 度) になる。O(dz) のずれだが上記の
     測定バイアスより小さく、変更は上流 (BPM-Matlab) 由来のカーネルの挙動を変えるため
     見送る
+
+# 第 22 回: CI 環境の GCC 更新で FDTD 側のコードがビルドできなくなった
+
+- [x] **`Gline` (double (*)[2][3]) を double * として渡す初期化子がエラーになった** ✅ 対応済み
+  - 場所: `sol/solve.c` / `mpi/solve.c` / `post/readhdf5.c`
+  - 現状: 2026-10-31 の CI で build-cpu / build-mpi がコンパイルエラーで失敗。
+    ランナーの GCC が更新され (GCC 14 以降)、`-Wincompatible-pointer-types` が既定で
+    エラー扱いになった。HDF5 出力の配列表 `{"Gline", Gline, ...}` が `double *` の
+    フィールドへ `double (*)[2][3]` を暗黙変換していた。手元の GCC 13.3 では警告のみ。
+    コード自体は main と同じなので **main も同じ理由でビルドが落ちる状態**。
+  - 対応内容: 3 箇所を明示的なキャストに変更 (`(double *)Gline` / `(double **)&Gline`)。
+    Gline は連続した NGline*2*3 個の double なので挙動は暗黙変換と同じ
+    (`cuda_mpi/solve.cu` は既に `reinterpret_cast<double*>` で同じ扱い)。
+  - 検証: GCC 14 で既定エラーになる警告 (`incompatible-pointer-types` /
+    `implicit-function-declaration` / `int-conversion` / `implicit-int`) を
+    `-Werror` にしてローカルでフルビルドし、エラー 0 件 (修正前は sol/solve.c と
+    post/readhdf5.c の 2 件を再現。後者は CI では最初のエラーで止まり未表示だった)。
+    fiber の output power 3.122506e+02 不変、obpm_post のページ数不変、ctest 10 本通過。
+    mpi/solve.c は MPI 環境が手元に無いため CI の build-mpi で確認する
