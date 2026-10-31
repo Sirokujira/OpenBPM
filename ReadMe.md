@@ -92,8 +92,10 @@ cmake --build build -j
     (`obpm`) と突き合わせてください。
   - `pml` (PML 吸収境界) も CUDA 版に実装済みです (近軸・拡張の両カーネルで
     面ごとの伸長係数を使用)。こちらも **GPU 実機での実行検証は未実施**です。
-  - **`wlsweep` (波長掃引) は CPU 版のみ**です。CUDA 版で指定した場合は実行時に
-    warning を表示して無視します (先頭波長のみ計算されます)。
+  - `wlsweep` (波長掃引) も CUDA 版に実装済みです。波長ごとに 1 波長分の計算全体
+    (屈折率・係数・励振・伝搬) をやり直すため、最終波長の結果は単独実行と同じになり、
+    `spectrum.csv` も CPU 版と同じ形式で出力します。**GPU 実機での実行検証は未実施**で、
+    実行時に「実機未検証」の note を表示します。
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI + 並列 HDF5。例: `libopenmpi-dev libhdf5-openmpi-dev`)
   - `obpm_mpi` は OpenFDTD 由来の **FDTD 時間領域ソルバー (BPM ではない)**。
@@ -299,7 +301,7 @@ z によらずほぼ一定になり、テーパ/ツイスト/曲げではモー�
 | `pml` | `pml = <width[m]> [<R0>]` | 横方向境界の PML (複素座標伸長)。`width` = 層厚 [m] (4 辺の内側に確保)、`R0` = 目標往復振幅反射率 (既定 `1e-20`、かすめ入射 kx = k0·n0 基準で `sigma_max = -(m+1)ln(R0)/(2 k0 n0 W)`, m = 3)。指定時は従来の端部吸収体を無効化する。省略時は従来の吸収体 (後方互換) |
 | `modes` | `modes = <nModes> [excite]` | 入力断面のモード解析 (虚軸伝搬法)。導波条件 (n_clad < neff) を満たすモードを neff 降順に求め、`/modes/mode<i>` と `/modes/neff` に出力。`excite` 指定で入射ビームを基本モードに置き換え (モード整合励振)。省略時は解析なし |
 | `launch` | `launch = <gauss\|mode [<m>[:<coef>] ...]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モードを虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (引数省略時は基本モード 0)。複数指定すると**重ね合わせ**、`<m>:<coef>` で係数を与える (省略時 1、最大 8 モード)。入力電力は係数に依らず `feed` 電圧^2 に正規化されるため係数は分岐比のみを決める。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
-| `wlsweep` | `wlsweep = <0\|1>` | 波長掃引。`frequency2` の全点を順に計算し、各波長の透過率を `spectrum.csv` (lambda_m, frequency_Hz, transmission) へ出力する。`/field` と HDF5 メタデータは**最終波長**の結果。省略時 (0) は先頭波長のみ = 従来動作。**CPU 版のみ** |
+| `wlsweep` | `wlsweep = <0\|1>` | 波長掃引。`frequency2` の全点を順に計算し、各波長の透過率を `spectrum.csv` (lambda_m, frequency_Hz, transmission) へ出力する。`/field` と HDF5 メタデータは**最終波長**の結果。省略時 (0) は先頭波長のみ = 従来動作。CUDA 版も対応 (実機未検証) |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
 | `powersweep` | `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log\|lin]` | 入力パワー掃引 (既定 lin)。`activation_curve.csv` に P_out(P_in) を出力。省略時は従来の単発計算 |
 

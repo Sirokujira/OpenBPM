@@ -509,7 +509,7 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
     **「実装済みだが GPU 実機未検証」の note** を出すようにした
     (`*** note : tpa / powersweep are implemented in the CUDA solver but not yet
     validated on real GPU hardware. Cross-check against the CPU solver (obpm)
-    if accuracy matters.`)。`wlsweep` は実際に未対応なので警告のまま残す。
+    if accuracy matters.`)。`wlsweep` は当時実際に未対応だったので警告のまま残した (第 23 回で実装)。
     ReadMe / `.claude/rules/cuda.md` / `AGENTS.md` の記述も実態に合わせ、
     「実装したら『無視される』警告を必ず消す」ことを規約に追加した。
   - 検証: CUDA 12.0 でのコンパイル検証済み。CUDA 側で実際に TPA が適用される
@@ -794,7 +794,7 @@ OpenFDTD-X (GUI) 側で伝搬の様子をグラフ表示できるよう、HDF5 �
 
 前回 (第 14 回) 以降の main の変更は Windows CUDA/MPI ビルド対応・MPI HDF5 の
 集団書き込み・CUDA 収束履歴の修正で、いずれも FDTD 側。マーカー走査はコード 0 件
-(既知の `wlsweep` CUDA 未対応の警告のみ)。キーワード × パスの対応表は
+(既知の `wlsweep` CUDA 未対応の警告のみ。第 23 回で解消)。キーワード × パスの対応表は
 CPU/CUDA で参照フィールドが完全一致することを確認した。
 
 ## 検証ギャップ (監査で見つけた出発点)
@@ -1034,3 +1034,32 @@ CPU/CUDA で参照フィールドが完全一致することを確認した。
     テンプレートを含む擬似 omp.h を -I で先に読ませて C++ で obpm.h をコンパイルし、
     修正前は CI と同じ "template with C linkage"、修正後は通過することを確認。
     GCC 14 (g++-14) でフルビルドしてエラー 0 件。ctest 10 本通過、fiber 不変
+
+# 第 23 回: CPU/CUDA パリティ — CUDA 版の `wlsweep` (最後の既知の機能差)
+
+- [x] **CUDA 版 (`obpm_cuda`) が `wlsweep` を警告して無視していた** ✅ 対応済み (⚠ 実機検証のみ未実施)
+  - 場所: `cuda/solve_bpm.cu` / `ReadMe.md` / `.claude/rules/cuda.md`
+  - 現状 (対応前): `wlsweep = 1` を指定しても CUDA 版は先頭波長だけを計算し、
+    `spectrum.csv` を出さなかった (warning は出していた)。キーワード × パスの対応表で
+    残っていた唯一の CPU/CUDA 機能差。
+  - 対応内容: 従来の `solve_bpm()` 本体を 1 波長分の計算 `solve_bpm_one(…, lambda, iwl, nwl)`
+    (戻り値 = 透過率) に切り出し、新しい `solve_bpm()` が CPU 版と同じ規則
+    (frequency2 優先、無ければ frequency1) で波長ループを回して `spectrum.csv`
+    (lambda_m, frequency_Hz, transmission, `%.6e`) を書く。
+    - 本体は元々すべての作業領域 (デバイス構造体・wabpm コンテキスト・モード界・
+      HDF5) を関数内で確保・解放していたため、波長ごとに丸ごと呼び直せる。
+      屈折率・ADI 係数・PML・励振・モード解析が毎回その波長で組み直されるので、
+      CPU 版の `wlsweep_check` が要求する「最終波長の結果 = その波長の単独実行」は
+      構造上そのまま成り立つ (取りこぼしの余地が無い)
+    - 1 回だけで良い処理は `iwl == 0` に限定: セル幅・不均一メッシュ・無効キーワードの
+      ログ、writeout 用の near3d ゼロ配列 (calloc。毎回確保するとリークする)。
+      `memfree2_gpu()/memfree3_gpu()` は波長ループの後へ移動
+    - 透過率は CPU 版と同じ定義 (伝搬開始時の precisePower を分母、出口 Efinal の
+      生の |E|^2 和を分子。powersweep 時は最終掃引点)。ログ行
+      `wlsweep %d / %d : lambda = …` / `wlsweep : lambda = … -> T = …` も同一書式
+    - `ignored[]` の wlsweep 警告を削除し、tpa/powersweep と同じ「実装済み・実機未検証」の
+      note に置き換えた (規約「実装したら『無視される』警告を残さない」)
+  - 検証: nvcc 12.0 (CI の build-cuda と同じ Ubuntu パッケージ) で `obpm_cuda` の
+    コンパイル・リンクを確認 (エラー 0 件。警告は従来からある `status` 未使用の 1 件のみ)。**GPU 実機での実行は未実施**。
+    `wlsweep` 未指定時は nwl = 1 で従来と同じ 1 回呼び出しになり、出力内容は不変
+    (ログに追加行なし)。CPU 版のコードは変更なし
