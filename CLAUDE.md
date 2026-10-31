@@ -66,7 +66,7 @@ python3 tools/plot_ixz.py time_series_data.h5
 | `post/postbpm.c` | obpm_post の BPM 可視化 (/field 等高線 + /trace 折れ線グラフ) |
 | `mpi/`, `cuda_mpi/` | MPI 版 (FDTD のみ、BPM 未対応) |
 | `tests/` | ctest 10 本 (単体: wabpm/modes/allset/fdbpm/pml、結合: ONN 活性化 / モードビート / 波長掃引) |
-| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証スクリプト (`check_activation.sh`) |
+| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証スクリプト (`check_activation.sh`, `check_taper_twist.py`) |
 | `data/` | OpenFDTD 形式 (.ofd) のサンプル入力。理論値との比較ポイントをコメントに記載 |
 | `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |
 

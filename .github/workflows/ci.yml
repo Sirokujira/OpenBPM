@@ -268,6 +268,14 @@ jobs:
                if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
                print "taper/twist OK: output power = " p; ok = 1 }
                END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+          # 幾何判定 : 出口の屈折率分布の主軸角と長辺 (テーパ後 4um) を比べる。
+          # 90 度では回転の向きを区別できないので +45 度でも判定する
+          # (逆回転なら 135 度、テーパ無しなら長辺 2σ が 2 倍になり検出できる)
+          python3 "$GITHUB_WORKSPACE/tools/check_taper_twist.py" time_series_data.h5 --angle 90 --long 4e-6
+          sed 's/^twist = .*/twist = 225000/' taper_twist.ofd > t45.ofd
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out t45.ofd
+          grep -q "total 45.00 \[deg\]" obpm.log
+          python3 "$GITHUB_WORKSPACE/tools/check_taper_twist.py" time_series_data.h5 --angle 45 --long 4e-6
 
       # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になることを判定する
       - name: Smoke test — symmetry boundary
@@ -491,6 +499,14 @@ jobs:
                if (p < 220 || p > 230) { print "FAIL: output power " p " out of [220,230]"; exit 1 }
                print "taper/twist OK: output power = " p; ok = 1 }
                END { if (!ok) { print "FAIL: output power line not found"; exit 1 } }' obpm.log
+          # 幾何判定 : 出口の屈折率分布の主軸角と長辺 (テーパ後 4um) を比べる。
+          # 90 度では回転の向きを区別できないので +45 度でも判定する
+          # (逆回転なら 135 度、テーパ無しなら長辺 2σ が 2 倍になり検出できる)
+          python3 "$GITHUB_WORKSPACE/tools/check_taper_twist.py" time_series_data.h5 --angle 90 --long 4e-6
+          sed 's/^twist = .*/twist = 225000/' taper_twist.ofd > t45.ofd
+          "$GITHUB_WORKSPACE/bin/obpm" -n 2 -no-fdtd-out t45.ofd
+          grep -q "total 45.00 \[deg\]" obpm.log
+          python3 "$GITHUB_WORKSPACE/tools/check_taper_twist.py" time_series_data.h5 --angle 45 --long 4e-6
 
       # 対称境界 : 半領域計算で出力パワーが全領域の 1/2 になることを判定する
       - name: Smoke test — symmetry boundary
