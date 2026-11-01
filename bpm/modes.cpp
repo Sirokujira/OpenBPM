@@ -19,6 +19,7 @@ modes.cpp
 #include <complex>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
 #include "bpm/wabpm.h"
 
@@ -246,4 +247,99 @@ int wabpm_find_modes(const wabpm_params *W, const cplx *n2,
 	delete[] E;
 	delete[] work;
 	return found;
+}
+
+// ===================================================================
+// 完全ベクトルの基本モード (HE11 型) : 虚軸伝搬 + べき乗法
+//   pol_in = 1 なら x 偏波 (Ex 主成分)、2 なら y 偏波を初期値にして収束させる。
+//   基本モードは x / y 偏波で縮退しているため、初期偏波の側に収束する
+//   (交差項は主成分から副成分 Ey (Ex) を生み出すだけで偏波を回さない)。
+//   段階構成・n0 の取り直しは wabpm_find_modes と同じ。
+//   Ex, Ey : Nx*Ny [出力, |Ex|^2 + |Ey|^2 の和で L2 正規化]
+//   戻り値 : 1 = 導波モードが収束, 0 = 見つからない
+// ===================================================================
+int wabpm_fv_find_mode(const wabpm_params *W, const cplx *n2, int pol_in,
+                       int maxIter, double tol, cplx *Ex, cplx *Ey, double *neff)
+{
+	const long Nx = W->Nx;
+	const long Ny = W->Ny;
+	const long N = Nx * Ny;
+
+	const double v0_thr = wabpm_guided_threshold(W, n2);
+	wabpm_params Wsel = *W;
+	Wsel.pol = WABPM_POL_FULL;
+	if (v0_thr > 0) {
+		const double n0_new = std::sqrt(v0_thr);
+		const double a_keep = W->dz / (4 * W->k0 * W->n0);
+		Wsel.n0 = n0_new;
+		Wsel.dz = a_keep * 4 * W->k0 * n0_new;
+	}
+	const double a_sel = Wsel.dz / (4 * Wsel.k0 * Wsel.n0);
+	const double a_grid = 1.0 / ((4.0 / (Wsel.dx * Wsel.dx)) + (4.0 / (Wsel.dy * Wsel.dy)));
+	wabpm_params Wfast = Wsel;
+	Wfast.dz = std::min(a_sel, 16.0 * a_grid) * 4 * Wsel.k0 * Wsel.n0;
+	wabpm_params Wpol = Wsel;
+	Wpol.dz = a_grid * 4 * Wsel.k0 * Wsel.n0;
+	const int usePolish = (a_grid < a_sel);
+
+	// 初期値 : 領域中心のガウシアン (指定偏波のみ)
+	const double wx = 0.25 * Nx * W->dx;
+	const double wy = 0.25 * Ny * W->dy;
+	for (long iy = 0; iy < Ny; iy++) {
+		for (long ix = 0; ix < Nx; ix++) {
+			const double x = W->dx * (ix - (Nx - 1) / 2.0);
+			const double y = W->dy * (iy - (Ny - 1) / 2.0);
+			const double g = std::exp(-(x * x) / (wx * wx) - (y * y) / (wy * wy));
+			Ex[ix + iy * Nx] = (pol_in == 2) ? 0.0 : g;
+			Ey[ix + iy * Nx] = (pol_in == 2) ? g : 0.0;
+		}
+	}
+
+	cplx *wx_ = new cplx[N];
+	cplx *wy_ = new cplx[N];
+	auto norm2 = [&](double *nrm) {
+		double s = 0;
+		for (long i = 0; i < N; i++) s += std::norm(Ex[i]) + std::norm(Ey[i]);
+		*nrm = std::sqrt(s);
+		if (*nrm > 0) {
+			for (long i = 0; i < N; i++) { Ex[i] /= *nrm; Ey[i] /= *nrm; }
+		}
+	};
+	auto rayleigh = [&](const wabpm_params *Ws) {
+		wabpm_fv_apply_P(Ws, Ex, Ey, n2, wx_, wy_);
+		double num = 0, den = 0;
+		for (long i = 0; i < N; i++) {
+			num += (std::conj(Ex[i]) * wx_[i] + std::conj(Ey[i]) * wy_[i]).real();
+			den += std::norm(Ex[i]) + std::norm(Ey[i]);
+		}
+		return (Ws->n0 * Ws->n0) + ((num / den) / (Ws->k0 * Ws->k0));
+	};
+
+	double nrm;
+	norm2(&nrm);
+	double v_prev = 0;
+	int converged = 0;
+	for (int stage = 0; stage < 3; stage++) {
+		const wabpm_params *Ws = (stage == 0) ? &Wsel : ((stage == 1) ? &Wfast : &Wpol);
+		if ((stage >= 1) && !usePolish) break;
+		converged = 0;
+		for (int it = 0; it < maxIter; it++) {
+			wabpm_fv_imagdist_step(Ws, Ex, Ey, n2, (stage == 0));
+			norm2(&nrm);
+			if (nrm == 0.0) break;
+			const double v = rayleigh(Ws);
+			if ((it > 0) && (std::fabs(v - v_prev) < tol)) {
+				v_prev = v;
+				converged = 1;
+				break;
+			}
+			v_prev = v;
+		}
+	}
+	delete[] wx_;
+	delete[] wy_;
+
+	if (!converged || (v_prev <= v0_thr)) return 0;
+	*neff = std::sqrt(v_prev);
+	return 1;
 }

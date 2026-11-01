@@ -164,6 +164,8 @@ ctest --test-dir build --output-on-failure
 | `test_modes` | ステップインデックスファイバ LP01/LP11 の実効屈折率 (分散方程式の厳密解と比較)、モード直交性 |
 | `test_allset` | `findModes` / `modeSuperposition` / `offsetField` / `tiltField` (P_Struct API) |
 | `test_fdbpm` | スカラー近軸カーネル (既定経路, `bpm/FDBPMpropagator.c`) の自由空間回折 `w(z)`、エネルギー保存、一様吸収 `exp(-2*k0*n''*z)`、ビーム中心保持 |
+| `test_pml` | PML 吸収境界の後方互換 (伸長なしでビット一致)・境界反射 (壁なし参照との比較)・反射率の理論式 `R0^(2 sin(theta))` |
+| `test_fullvec` | 完全ベクトル BPM エンジン (`wabpm_fv_*`、ソルバーのキーワードは未配線)。一様媒質でスカラーにビット一致、高コントラストファイバ (1.45/空気) の HE11 実効屈折率をベクトル厳密解と比較 (誤差 2.7e-3、スカラー LP01 との差 0.049 = 偏波補正を 97% 再現)、交差偏波 Ey の電力比を厳密場と比較 (+0.9%)、x/y 縮退、モード伝搬の整合。格子収束は `tools/check_fullvector_he11.py` |
 | `mode_beat_solver` / `_check` | 多モード重ね合わせ励振の結合テスト。`data/fiber_mode_superposition.ofd` を実行し、伝搬マップの重心軌跡から求めたモードビート長を理論値 `lambda/\|neff0-neff1\|` と比較 (実測 5710um / 理論 5762um, 誤差 0.9%)。電力保存も検査 (`tests/check_modes_beat.py`) |
 | `wlsweep_check` | 波長掃引の結合テスト。`data/spectrum_sweep.ofd` の掃引結果が、最終波長を単独指定した実行と**完全一致**することを確認 (波長ごとの再設定に取りこぼしが無いことの検証)。`spectrum.csv` の点数・`lambda*f = c` も検査 (`tests/check_wlsweep.py`) |
 | `onn_activation_solver` / `_check` | ONN 光活性化関数の結合テスト。`data/sample/onn_activation.ofd` を実行し、`activation_curve.csv` を解析解 `T = 1/(1 + beta*(P_in/A_eff)*L)` と比較 (相対 7% 以内)。単調非増加・飽和・`P_out <= P_in` も検査 (`tests/check_activation.py`、CI の 3 OS でも同一スクリプトを使用) |

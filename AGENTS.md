@@ -16,7 +16,7 @@ OpenFDTD のコード構造を土台にしたビーム伝搬法 (BPM) 光導波�
 # ビルドタイプ未指定時は Release (最適化あり) が既定。デバッグは -DCMAKE_BUILD_TYPE=Debug
 cmake -S . -B build -DWITH_CUDA=OFF -DWITH_MPI=OFF -DWITH_TESTS=ON
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # 解析解との比較検証 10 本
+ctest --test-dir build --output-on-failure   # 解析解との比較検証 11 本
 ```
 
 回帰 (必ず確認):
@@ -63,8 +63,8 @@ LP モード、GI 自己集束ピッチ、チルト変位) は `.claude/rules/ph
 | `bpm/modes.cpp` | モードソルバ (虚軸伝搬法)。`launch = mode` と `modes = <n>` から使用 |
 | `sol/input_data.c` | .ofd パーサ。BPM 拡張キーワードもここ |
 | `post/postbpm.c` | obpm_post の BPM 可視化 (/field 等高線 + /trace 折れ線グラフ) |
-| `tests/` | ctest 10 本 (単体: wabpm/modes/allset/fdbpm/pml、結合: ONN/モードビート/波長掃引) |
-| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証 (`check_activation.sh`, `check_taper_twist.py`) |
+| `tests/` | ctest 11 本 (単体: wabpm/modes/allset/fdbpm/pml/fullvec、結合: ONN/モードビート/波長掃引) |
+| `tools/` | Python 可視化 (`plot_ixz.py`)・CI 検証 (`check_activation.sh`, `check_taper_twist.py`)・収束検証 (`check_fullvector_he11.py`) |
 | `docs/implementation-checklist.md` | 実装漏れ監査と対応状況の台帳 |
 
 出力: `time_series_data.h5` (`/field/Efinal_*`, `/field/Ixz`, `/field/Iyz`,

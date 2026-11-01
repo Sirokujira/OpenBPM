@@ -582,6 +582,7 @@ endif()
 #   - test_modes  : モードソルバ (LP01/LP11 の実効屈折率・直交性)
 #   - test_allset : P_Struct API (findModes/modeSuperposition/offset/tilt)
 #   - test_pml    : PML 吸収境界 (後方互換/境界反射/理論式との一致)
+#   - test_fullvec: 完全ベクトル BPM (スカラー帰着/HE11 厳密解/交差偏波 Ey/縮退/伝搬)
 # ---------------------------------------------------------------
 option(WITH_TESTS "Build unit tests" OFF)
 if (WITH_TESTS)
@@ -591,6 +592,7 @@ if (WITH_TESTS)
     add_executable(test_modes tests/test_modes.cpp bpm/modes.cpp bpm/wabpm.cpp)
     add_executable(test_allset tests/test_allset.cpp bpm/modes.cpp bpm/wabpm.cpp)
     add_executable(test_pml tests/test_pml.cpp bpm/wabpm.cpp)
+    add_executable(test_fullvec tests/test_fullvec.cpp bpm/modes.cpp bpm/wabpm.cpp)
     # スカラー近軸カーネルは C (float _Complex) のため、テストも C で書く。
     # MSVC の C コンパイラは C99 _Complex を扱えないため、カーネル本体と同様に
     # C++ (std::complex<float>) としてコンパイルする (bpm_prototype.h が切替)
@@ -600,7 +602,7 @@ if (WITH_TESTS)
     add_executable(test_fdbpm tests/test_fdbpm.c bpm/FDBPMpropagator.c)
     target_link_libraries(test_fdbpm PRIVATE ${MATH_LIB})
     target_link_libraries(test_allset PRIVATE Eigen3::Eigen)
-    foreach(t test_wabpm test_modes test_allset test_fdbpm test_pml)
+    foreach(t test_wabpm test_modes test_allset test_fdbpm test_pml test_fullvec)
         target_include_directories(${t} PRIVATE "${PROJECT_SOURCE_DIR}/include")
         if (OpenMP_CXX_FOUND)
             target_link_libraries(${t} PRIVATE OpenMP::OpenMP_CXX)
@@ -612,6 +614,7 @@ if (WITH_TESTS)
     add_test(NAME allset_unit COMMAND test_allset)
     add_test(NAME fdbpm_unit COMMAND test_fdbpm)
     add_test(NAME pml_unit COMMAND test_pml)
+    add_test(NAME fullvec_unit COMMAND test_fullvec)
 
     # ONN 光活性化関数 (TPA + powersweep) の結合テスト:
     # ソルバーを実際に走らせ、activation_curve.csv を平面波近似の解析解
