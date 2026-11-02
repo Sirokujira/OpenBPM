@@ -42,6 +42,8 @@ struct wabpm_dev {
 	// 対称境界 : ix=0 / iy=0 の手前 (半セル外) に鏡像面。E[-1] = sgn*E[0]
 	int    hasSx, hasSy;
 	double sgnx, sgny;
+	// PML (複素座標伸長) : 面ごとの伸長係数の逆数 (デバイス配列, NULL = 無効)
+	const cplxd *gxm, *gxp, *gym, *gyp;
 };
 
 struct wabpm_gpu {
@@ -52,26 +54,43 @@ struct wabpm_gpu {
 	cplxd *d_cw;    // Thomas 法の上対角バッファ (Nx*Ny)
 	float *d_mult;  // 端部吸収体
 	float *d_beta;  // TPA 係数 (スライス) [m/W]
+	cplxd *d_g[4];  // PML 係数 (gxm, gxp, gym, gyp。未使用時は NULL)
 	size_t N;
 };
 
 // 偏波方向のステンシル重み (pol = 1 なら Stern, 0 なら標準ラプラシアン)
+// 対角項は -側/+側の面の寄与に分けて持ち、PML 使用時は面ごとの係数 gm/gp を
+// 掛ける (CPU 版 bpm/wabpm.cpp の stencil() と同一規約)。
 __device__ __forceinline__
 static void dstencil(int pol, const cplxd *n2, long i, long stride, long idx, long num,
-                     double *a, double *b, double *c)
+                     const cplxd *gm, const cplxd *gp,
+                     cplxd *a, cplxd *b, cplxd *c)
 {
+	double wa, wbm, wbp, wc;
 	if (pol) {
 		const double nc = n2[i].real();
 		const double nm = (idx > 0)       ? n2[i - stride].real() : nc;
 		const double np = (idx < num - 1) ? n2[i + stride].real() : nc;
-		*a = 2 * nm / (nc + nm);
-		*c = 2 * np / (nc + np);
-		*b = -((2 * nc / (nc + nm)) + (2 * nc / (nc + np)));
+		wa  = 2 * nm / (nc + nm);
+		wc  = 2 * np / (nc + np);
+		wbm = -(2 * nc / (nc + nm));
+		wbp = -(2 * nc / (nc + np));
 	}
 	else {
-		*a = 1;
-		*b = -2;
-		*c = 1;
+		wa  = 1;
+		wc  = 1;
+		wbm = -1;
+		wbp = -1;
+	}
+	if (gm != NULL) {
+		*a = wa * gm[idx];
+		*b = (wbm * gm[idx]) + (wbp * gp[idx]);
+		*c = wc * gp[idx];
+	}
+	else {
+		*a = wa;
+		*b = wbm + wbp;
+		*c = wc;
 	}
 }
 
@@ -82,8 +101,8 @@ static void k_explicit_y(struct wabpm_dev D, const cplxd *E, cplxd *T, const cpl
 	const long N = (long)D.Nx * D.Ny;
 	for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < N; i += gridDim.x * (long)blockDim.x) {
 		const long iy = i / D.Nx;
-		double a, b, c;
-		dstencil(D.poly, n2, i, D.Nx, iy, D.Ny, &a, &b, &c);
+		cplxd a, b, c;
+		dstencil(D.poly, n2, i, D.Nx, iy, D.Ny, D.gym, D.gyp, &a, &b, &c);
 		cplxd lap = b * E[i];
 		if (iy > 0)          lap += a * E[i - D.Nx];
 		else if (D.hasSy)    lap += (a * D.sgny) * E[i];   // 鏡像セル
@@ -100,8 +119,8 @@ static void k_explicit_x(struct wabpm_dev D, cplxd *E, const cplxd *T, const cpl
 	const long N = (long)D.Nx * D.Ny;
 	for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < N; i += gridDim.x * (long)blockDim.x) {
 		const long ix = i % D.Nx;
-		double a, b, c;
-		dstencil(D.polx, n2, i, 1, ix, D.Nx, &a, &b, &c);
+		cplxd a, b, c;
+		dstencil(D.polx, n2, i, 1, ix, D.Nx, D.gxm, D.gxp, &a, &b, &c);
 		cplxd lap = b * T[i];
 		if (ix > 0)          lap += a * T[i - 1];
 		else if (D.hasSx)    lap += (a * D.sgnx) * T[i];   // 鏡像セル
@@ -120,8 +139,8 @@ static void k_implicit_x(struct wabpm_dev D, cplxd *E, const cplxd *n2, cplxd *c
 		cplxd *w = &cw[iy * (long)D.Nx];
 		for (long ix = 0; ix < D.Nx; ix++) {
 			const long i = ix + iy * (long)D.Nx;
-			double a, b, c;
-			dstencil(D.polx, n2, i, 1, ix, D.Nx, &a, &b, &c);
+			cplxd a, b, c;
+			dstencil(D.polx, n2, i, 1, ix, D.Nx, D.gxm, D.gxp, &a, &b, &c);
 			const cplxd V2 = 0.5 * D.k0 * D.k0 * (n2[i] - D.n02);
 			const cplxd sub  = D.dp * (a * D.idx2);
 			cplxd       diag = 1.0 + D.dp * (b * D.idx2 + V2);
@@ -151,8 +170,8 @@ static void k_implicit_y(struct wabpm_dev D, cplxd *E, const cplxd *n2, cplxd *c
 		cplxd *w = &cw[ix * (long)D.Ny];
 		for (long iy = 0; iy < D.Ny; iy++) {
 			const long i = ix + iy * (long)D.Nx;
-			double a, b, c;
-			dstencil(D.poly, n2, i, D.Nx, iy, D.Ny, &a, &b, &c);
+			cplxd a, b, c;
+			dstencil(D.poly, n2, i, D.Nx, iy, D.Ny, D.gym, D.gyp, &a, &b, &c);
 			const cplxd V2 = 0.5 * D.k0 * D.k0 * (n2[i] - D.n02);
 			const cplxd sub  = D.dp * (a * D.idy2);
 			cplxd       diag = 1.0 + D.dp * (b * D.idy2 + V2);
@@ -259,6 +278,23 @@ struct wabpm_gpu *wabpm_gpu_create(const wabpm_params *W,
 	WABPM_CHECK(cudaMemcpy(G->d_E,    E_host,    G->N * sizeof(cplxd), cudaMemcpyHostToDevice));
 	WABPM_CHECK(cudaMemcpy(G->d_mult, mult_host, G->N * sizeof(float), cudaMemcpyHostToDevice));
 
+	// PML (複素座標伸長) の係数をデバイスへ転送する (未指定なら NULL のまま)
+	G->d_g[0] = G->d_g[1] = G->d_g[2] = G->d_g[3] = NULL;
+	G->D.gxm = G->D.gxp = G->D.gym = G->D.gyp = NULL;
+	if (W->gxm != NULL) {
+		// std::complex<double> と thrust::complex<double> は同一レイアウト (double 2 個)
+		const std::complex<double> *src[4] = {W->gxm, W->gxp, W->gym, W->gyp};
+		const size_t num[4] = {(size_t)W->Nx, (size_t)W->Nx, (size_t)W->Ny, (size_t)W->Ny};
+		for (int k = 0; k < 4; k++) {
+			WABPM_CHECK(cudaMalloc(&G->d_g[k], num[k] * sizeof(cplxd)));
+			WABPM_CHECK(cudaMemcpy(G->d_g[k], src[k], num[k] * sizeof(cplxd), cudaMemcpyHostToDevice));
+		}
+		G->D.gxm = G->d_g[0];
+		G->D.gxp = G->d_g[1];
+		G->D.gym = G->d_g[2];
+		G->D.gyp = G->d_g[3];
+	}
+
 	return G;
 }
 
@@ -324,5 +360,8 @@ void wabpm_gpu_destroy(struct wabpm_gpu *G)
 	cudaFree(G->d_cw);
 	cudaFree(G->d_mult);
 	cudaFree(G->d_beta);
+	for (int k = 0; k < 4; k++) {
+		if (G->d_g[k] != NULL) cudaFree(G->d_g[k]);
+	}
 	free(G);
 }

@@ -44,7 +44,7 @@ extern void        monitor4(FILE *, const double []);
 extern int         nearest(double, int, int, const double *);
 extern void        NodeE_c(int, int, int, int, d_complex_t *, d_complex_t *, d_complex_t *);
 extern void        NodeH_c(int, int, int, int, d_complex_t *, d_complex_t *, d_complex_t *);
-extern void        outputChars(FILE *);
+extern void        outputChars(FILE *, int);   // 第2引数 : 遠方界用閉曲面を準備するか
 extern void        outputCoupling(FILE *);
 extern void        outputCross(FILE *);
 extern void        outputFar0d(void);
@@ -81,6 +81,7 @@ extern void        readout(FILE *);
 extern void        rectangleContour(double [4][3], double, double, int);
 extern void        rgbColor(double, unsigned char *, unsigned char *, unsigned char *, int);
 extern void        setup(void);
+extern void        setup_bpm(void);   // BPM 専用 (FDTD 専用のセットアップを省く)
 extern void        setupABCsize(void);
 extern void        setupDft(void);
 extern void        setupDispersion(void);

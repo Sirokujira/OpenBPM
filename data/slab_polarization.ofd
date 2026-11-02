@@ -17,6 +17,12 @@
 #      (最終断面または /field/Ixz の z 平均で確認)
 #   2. polarization = y に変更するとジャンプが消え連続になる
 #   3. TE/TM で実効屈折率・閉じ込めが異なる (偏波依存)
+#   4. modes = 1 のモード解析 (スカラー = TE) が解析解と一致する:
+#      分散方程式 u tan(u) = gamma*a の厳密解は neff = 1.674176。
+#      2D 計算では y 方向の閉じ込め (Dirichlet, Ly = 10um) の分だけ下がるので
+#      ログに出る値は neff = 1.673451 (離散化 +1e-3 と y 補正 -1.7e-3 の和)。
+#      コアが y の上下端に達する形状のため、導波判定を「境界リング全体の最大値」で
+#      行うとモードが 0 本になる (辺ごとの最大値の最小値で判定すること)
 OpenBPM 2 2
 title = high-contrast slab polarization (BPM sample)
 
@@ -46,6 +52,9 @@ polarization = x
 
 # refindex = <n0>
 refindex = 1.5
+
+# modes = <n> : 入力断面のモード解析 (スカラー = TE 相当)
+modes = 1
 
 frequency2 = 1.93414489e14 1.93414489e14 0
 

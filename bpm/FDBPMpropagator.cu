@@ -57,6 +57,25 @@
 __host__ __device__
 float sqrf(float x) {return x*x;}
 
+// PML (複素座標伸長) 使用時の面ごとの ADI 係数 (CPU 版 FDBPMpropagator.c と同一)。
+// P->pml* が NULL (PML 無効) なら ax/ay をそのまま返す。
+__device__ __forceinline__
+static floatcomplex axm_of(struct parameters *P, long ix) {
+  return P->pmlxm? P->ax*P->pmlxm[ix]: P->ax;
+}
+__device__ __forceinline__
+static floatcomplex axp_of(struct parameters *P, long ix) {
+  return P->pmlxp? P->ax*P->pmlxp[ix]: P->ax;
+}
+__device__ __forceinline__
+static floatcomplex aym_of(struct parameters *P, long iy) {
+  return P->pmlym? P->ay*P->pmlym[iy]: P->ay;
+}
+__device__ __forceinline__
+static floatcomplex ayp_of(struct parameters *P, long iy) {
+  return P->pmlyp? P->ay*P->pmlyp[iy]: P->ay;
+}
+
 // #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
 // __device__ double atomicAdd(double* address, double val) {
 //   unsigned long long int* address_as_ull = (unsigned long long int*)address;
@@ -96,10 +115,10 @@ void substep1a(struct parameters *P_global) {
     if(ix<P->Nx && iy<P->Ny) {
       long i = ix + iy*P->Nx;
       tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] = P->E1[i];
-      if(ix != 0                                 ) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i-1]     - P->E1[i])*P->ax;
-      if(ix != P->Nx-1 && (!yAntiSymm || ix != 0)) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i+1]     - P->E1[i])*P->ax;
-      if(iy != 0                                 ) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i-P->Nx] - P->E1[i])*P->ay*2;
-      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i+P->Nx] - P->E1[i])*P->ay*2;
+      if(ix != 0                                 ) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i-1]     - P->E1[i])*axm_of(P,ix);
+      if(ix != P->Nx-1 && (!yAntiSymm || ix != 0)) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i+1]     - P->E1[i])*axp_of(P,ix);
+      if(iy != 0                                 ) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i-P->Nx] - P->E1[i])*aym_of(P,iy)*2;
+      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] += (P->E1[i+P->Nx] - P->E1[i])*ayp_of(P,iy)*2;
     }
     __syncthreads();
     // Save transposed xy -> yx
@@ -122,21 +141,21 @@ void substep1b(struct parameters *P_global) {
   for(long iy=threadNum;iy<P->Ny;iy+=gridDim.x*blockDim.x*blockDim.y){
     for(long ix=0; ix<P->Nx; ix++) {
       long i = iy + ix*P->Ny;
-      if     (ix == 0 && yAntiSymm) P->b[i] = 1          ;
-      else if(ix == 0             ) P->b[i] = 1 +   P->ax;
-      else if(ix < P->Nx-1        ) P->b[i] = 1 + 2*P->ax;
-      else                          P->b[i] = 1 +   P->ax;
+      if     (ix == 0 && yAntiSymm) P->b[i] = 1;
+      else if(ix == 0             ) P->b[i] = 1 + axp_of(P,ix);
+      else if(ix < P->Nx-1        ) P->b[i] = 1 + axm_of(P,ix) + axp_of(P,ix);
+      else                          P->b[i] = 1 + axm_of(P,ix);
 
       if(ix > 0) {
-        floatcomplex w   = -P->ax/P->b[i-P->Ny];
-        P->b[i]         += w*(ix == 1 && yAntiSymm? 0: P->ax);
+        floatcomplex w   = -axm_of(P,ix)/P->b[i-P->Ny];
+        P->b[i]         += w*(ix == 1 && yAntiSymm? 0: axp_of(P,ix-1));
         P->Eyx[i]       -= w*P->Eyx[i-P->Ny];
       }
     }
 
     for(long ix=P->Nx-1; ix>=0 + yAntiSymm; ix--) {
       long i = iy + ix*P->Ny;
-      P->Eyx[i] = (P->Eyx[i] + (ix == P->Nx-1? 0: P->ax*P->Eyx[i+P->Ny]))/P->b[i];
+      P->Eyx[i] = (P->Eyx[i] + (ix == P->Nx-1? 0: axp_of(P,ix)*P->Eyx[i+P->Ny]))/P->b[i];
     }
   }
 }
@@ -171,8 +190,8 @@ void substep2a(struct parameters *P_global) {
       long i = ix + iy*P->Nx;
 
       floatcomplex deltaE = 0;
-      if(iy != 0                                 ) deltaE -= (P->E1[i-P->Nx] - P->E1[i])*P->ay;
-      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) deltaE -= (P->E1[i+P->Nx] - P->E1[i])*P->ay;
+      if(iy != 0                                 ) deltaE -= (P->E1[i-P->Nx] - P->E1[i])*aym_of(P,iy);
+      if(iy != P->Ny-1 && (!xAntiSymm || iy != 0)) deltaE -= (P->E1[i+P->Nx] - P->E1[i])*ayp_of(P,iy);
       P->E2[i] = tile[threadIdx.x + threadIdx.y*(TILE_DIM+1)] + deltaE;
     }
   }
@@ -192,20 +211,20 @@ void substep2b(struct parameters *P_global) {
     for(long iy=0; iy<P->Ny; iy++) {
       long i = ix + iy*P->Nx;
       if     (iy == 0 && xAntiSymm) P->b[i] = 1          ;
-      else if(iy == 0             ) P->b[i] = 1 +   P->ay;
-      else if(iy < P->Ny-1        ) P->b[i] = 1 + 2*P->ay;
-      else                          P->b[i] = 1 +   P->ay;
+      else if(iy == 0             ) P->b[i] = 1 + ayp_of(P,iy);
+      else if(iy < P->Ny-1        ) P->b[i] = 1 + aym_of(P,iy) + ayp_of(P,iy);
+      else                          P->b[i] = 1 + aym_of(P,iy);
 
       if(iy > 0) {
-        floatcomplex w   = -P->ay/P->b[i-P->Nx];
-        P->b[i]         += w*(iy == 1 && xAntiSymm? 0: P->ay);
+        floatcomplex w   = -aym_of(P,iy)/P->b[i-P->Nx];
+        P->b[i]         += w*(iy == 1 && xAntiSymm? 0: ayp_of(P,iy-1));
         P->E2[i]        -= w*P->E2[i-P->Nx];
       }
     }
 
     for(long iy=P->Ny-1; iy>=0 + xAntiSymm; iy--) {
       long i = ix + iy*P->Nx;
-      P->E2[i] = (P->E2[i] + (iy == P->Ny-1? 0: P->ay*P->E2[i+P->Nx]))/P->b[i];
+      P->E2[i] = (P->E2[i] + (iy == P->Ny-1? 0: ayp_of(P,iy)*P->E2[i+P->Nx]))/P->b[i];
       EfieldPowerThread += sqrf(CREALF(P->E2[i])) + sqrf(CIMAGF(P->E2[i]));
     }
   }
@@ -221,6 +240,11 @@ void applyMultiplier(struct parameters *P_global, long iz, struct debug *D) {
   struct parameters *P = (struct parameters *)Pdummy;
   if(!threadIdx.x && !threadIdx.y) *P = *P_global; // Only let one thread per block do the copying
   __syncthreads(); // All threads in the block wait for the copy to have finished
+  // PML 使用時 : ADI 演算子自体が境界で電力を吸収するため、電力簿記
+  // precisePower を実際の場の電力へ同期させる (そうしないと fieldCorrection が
+  // PML の吸収をそのまま打ち消してしまい、境界で反射したのと同じ結果になる)。
+  // TPA で precisePower を同率で減らしているのと同じ理由。
+  if(P->pmlxm) P->precisePower = P->EfieldPower;
   float fieldCorrection = sqrtf((float)P->precisePower/P->EfieldPower);
   float cosvalue = cosf(-P->twistPerStep*iz); // Minus is because we go from the rotated frame to the source frame
   float sinvalue = sinf(-P->twistPerStep*iz);
@@ -370,6 +394,18 @@ void createDeviceStructs(struct parameters *P, struct parameters **P_devptr,
   gpuErrchk(cudaMalloc(&P_tempvar.n_in,N_n*sizeof(floatcomplex)));
   gpuErrchk(cudaMemcpy(P_tempvar.n_in,P->n_in,N_n*sizeof(floatcomplex),cudaMemcpyHostToDevice));
 
+  // PML (複素座標伸長) の面係数 (ホスト側が NULL なら PML 無効のまま)
+  if(P->pmlxm) {
+    gpuErrchk(cudaMalloc(&P_tempvar.pmlxm,P->Nx*sizeof(floatcomplex)));
+    gpuErrchk(cudaMemcpy(P_tempvar.pmlxm,P->pmlxm,P->Nx*sizeof(floatcomplex),cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&P_tempvar.pmlxp,P->Nx*sizeof(floatcomplex)));
+    gpuErrchk(cudaMemcpy(P_tempvar.pmlxp,P->pmlxp,P->Nx*sizeof(floatcomplex),cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&P_tempvar.pmlym,P->Ny*sizeof(floatcomplex)));
+    gpuErrchk(cudaMemcpy(P_tempvar.pmlym,P->pmlym,P->Ny*sizeof(floatcomplex),cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&P_tempvar.pmlyp,P->Ny*sizeof(floatcomplex)));
+    gpuErrchk(cudaMemcpy(P_tempvar.pmlyp,P->pmlyp,P->Ny*sizeof(floatcomplex),cudaMemcpyHostToDevice));
+  }
+
   gpuErrchk(cudaMalloc(P_devptr, sizeof(struct parameters)));
   gpuErrchk(cudaMemcpy(*P_devptr,&P_tempvar,sizeof(struct parameters),cudaMemcpyHostToDevice));
 
@@ -394,6 +430,12 @@ void retrieveAndFreeDeviceStructs(struct parameters *P, struct parameters *P_dev
   gpuErrchk(cudaFree(P_temp.b));
   gpuErrchk(cudaFree(P_temp.multiplier));
   gpuErrchk(cudaFree(P_temp.n_in));
+  if(P_temp.pmlxm) {
+    gpuErrchk(cudaFree(P_temp.pmlxm));
+    gpuErrchk(cudaFree(P_temp.pmlxp));
+    gpuErrchk(cudaFree(P_temp.pmlym));
+    gpuErrchk(cudaFree(P_temp.pmlyp));
+  }
   gpuErrchk(cudaFree(P_dev));
 
 

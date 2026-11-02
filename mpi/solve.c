@@ -714,7 +714,9 @@ void solve(int io, double *tdft, FILE *fp)
             {"VPoint", VPoint, NPoint * (Solver.maxiter + 1)},
             {"Freq1", Freq1, NFreq1},
             {"Freq2", Freq2, NFreq2},
-            {"Gline", Gline, NGline * 2 * 3}
+            // Gline は double (*)[2][3]。GCC 14 以降は暗黙のポインタ型変換がエラーになる
+            // ため明示的にキャストする (cuda_mpi/solve.cu の reinterpret_cast と同じ扱い)
+            {"Gline", (double *)Gline, NGline * 2 * 3}
         };
 
         /* 集団操作である H5Dcreate は全 rank で次元が一致していなければ

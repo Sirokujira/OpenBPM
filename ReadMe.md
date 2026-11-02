@@ -54,6 +54,13 @@ cmake --build build -j
 
 実行ファイルは `bin/` に出力されます (`obpm`, `obpm_post`)。
 
+> **ビルドタイプ**: `CMAKE_BUILD_TYPE` を指定しない場合は **Release**
+> (最適化あり) を既定にします。以前は未指定だと GCC/Clang が `-O0` で
+> コンパイルするため、同じソースでも 2.4〜2.7 倍遅いバイナリになっていました
+> (実測: fiber 0.76 → 0.28 秒、slab_polarization 51.5 → 21.1 秒。
+> 数値は `-O0` と Release でビット一致するので純粋な速度差)。
+> デバッグビルドは `-DCMAKE_BUILD_TYPE=Debug` を明示してください。
+
 > **並列実行について**: BPM の伝搬は OpenMP で並列化されています
 > (4 コアでの実測: 近軸 1.9 倍、広角 2.4 倍、半ベクトル 2.3 倍)。
 > 同一スレッド数なら結果はビット単位で再現しますが、スレッド数が変わると
@@ -83,8 +90,12 @@ cmake --build build -j
     `activation_curve.csv` 出力)。ただし **GPU 実機での実行検証は未実施**のため、
     実行時に「実機未検証」の note を表示します。精度が要る用途では CPU 版
     (`obpm`) と突き合わせてください。
-  - **`wlsweep` (波長掃引) は CPU 版のみ**です。CUDA 版で指定した場合は実行時に
-    warning を表示して無視します (先頭波長のみ計算されます)。
+  - `pml` (PML 吸収境界) も CUDA 版に実装済みです (近軸・拡張の両カーネルで
+    面ごとの伸長係数を使用)。こちらも **GPU 実機での実行検証は未実施**です。
+  - `wlsweep` (波長掃引) も CUDA 版に実装済みです。波長ごとに 1 波長分の計算全体
+    (屈折率・係数・励振・伝搬) をやり直すため、最終波長の結果は単独実行と同じになり、
+    `spectrum.csv` も CPU 版と同じ形式で出力します。**GPU 実機での実行検証は未実施**で、
+    実行時に「実機未検証」の note を表示します。
   - ビルドは CUDA 12.0 で確認済みです (GPU 実機での実行検証は未実施)。
 - MPI 版: `-DWITH_MPI=ON` (要 MPI + 並列 HDF5。例: `libopenmpi-dev libhdf5-openmpi-dev`)
   - `obpm_mpi` は OpenFDTD 由来の **FDTD 時間領域ソルバー (BPM ではない)**。
@@ -153,6 +164,8 @@ ctest --test-dir build --output-on-failure
 | `test_modes` | ステップインデックスファイバ LP01/LP11 の実効屈折率 (分散方程式の厳密解と比較)、モード直交性 |
 | `test_allset` | `findModes` / `modeSuperposition` / `offsetField` / `tiltField` (P_Struct API) |
 | `test_fdbpm` | スカラー近軸カーネル (既定経路, `bpm/FDBPMpropagator.c`) の自由空間回折 `w(z)`、エネルギー保存、一様吸収 `exp(-2*k0*n''*z)`、ビーム中心保持 |
+| `test_pml` | PML 吸収境界の後方互換 (伸長なしでビット一致)・境界反射 (壁なし参照との比較)・反射率の理論式 `R0^(2 sin(theta))` |
+| `test_fullvec` | 完全ベクトル BPM エンジン (`wabpm_fv_*`、ソルバーのキーワードは未配線)。一様媒質でスカラーにビット一致、高コントラストファイバ (1.45/空気) の HE11 実効屈折率をベクトル厳密解と比較 (誤差 2.7e-3、スカラー LP01 との差 0.049 = 偏波補正を 97% 再現)、交差偏波 Ey の電力比を厳密場と比較 (+0.9%)、x/y 縮退、モード伝搬の整合。格子収束は `tools/check_fullvector_he11.py` |
 | `mode_beat_solver` / `_check` | 多モード重ね合わせ励振の結合テスト。`data/fiber_mode_superposition.ofd` を実行し、伝搬マップの重心軌跡から求めたモードビート長を理論値 `lambda/\|neff0-neff1\|` と比較 (実測 5710um / 理論 5762um, 誤差 0.9%)。電力保存も検査 (`tests/check_modes_beat.py`) |
 | `wlsweep_check` | 波長掃引の結合テスト。`data/spectrum_sweep.ofd` の掃引結果が、最終波長を単独指定した実行と**完全一致**することを確認 (波長ごとの再設定に取りこぼしが無いことの検証)。`spectrum.csv` の点数・`lambda*f = c` も検査 (`tests/check_wlsweep.py`) |
 | `onn_activation_solver` / `_check` | ONN 光活性化関数の結合テスト。`data/sample/onn_activation.ofd` を実行し、`activation_curve.csv` を解析解 `T = 1/(1 + beta*(P_in/A_eff)*L)` と比較 (相対 7% 以内)。単調非増加・飽和・`P_out <= P_in` も検査 (`tests/check_activation.py`、CI の 3 OS でも同一スクリプトを使用) |
@@ -287,9 +300,10 @@ z によらずほぼ一定になり、テーパ/ツイスト/曲げではモー�
 | `twist` | `twist = <rate[deg/m]>` | 導波路のツイスト率。屈折率分布を z に沿って回転させる。省略時 0 |
 | `symmetry` | `symmetry = <x\|y\|xy> [sym\|anti]` | 対称境界。指定軸のメッシュ始端を鏡像面とし計算領域を 1/2〜1/4 に削減 (既定 sym)。**メッシュ・出力とも半領域**になる。省略時は対称境界なし |
 | `ripfile` | `ripfile = <path>` | 屈折率分布の直接入力 (geometry の代わりに使用)。`.csv` は 2D (Ny 行 x Nx 列の実数 n、z 不変)、`.h5`/`.hdf5` はデータセット `/rip/n` (2D: Ny x Nx / 3D: Nz x Ny x Nx)。寸法はメッシュと厳密一致。相対パスは入力 .ofd のディレクトリ基準でも解決。TPA の β は従来どおり geometry の材料 ID から決まる。省略時は geometry から構築 (従来動作) |
+| `pml` | `pml = <width[m]> [<R0>]` | 横方向境界の PML (複素座標伸長)。`width` = 層厚 [m] (4 辺の内側に確保)、`R0` = 目標往復振幅反射率 (既定 `1e-20`、かすめ入射 kx = k0·n0 基準で `sigma_max = -(m+1)ln(R0)/(2 k0 n0 W)`, m = 3)。指定時は従来の端部吸収体を無効化する。省略時は従来の吸収体 (後方互換) |
 | `modes` | `modes = <nModes> [excite]` | 入力断面のモード解析 (虚軸伝搬法)。導波条件 (n_clad < neff) を満たすモードを neff 降順に求め、`/modes/mode<i>` と `/modes/neff` に出力。`excite` 指定で入射ビームを基本モードに置き換え (モード整合励振)。省略時は解析なし |
 | `launch` | `launch = <gauss\|mode [<m>[:<coef>] ...]>` | 励振方法。`mode` は先頭スライスの屈折率分布から導波モードを虚軸伝搬法 (`bpm/modes.cpp`) で求めて励振する (引数省略時は基本モード 0)。複数指定すると**重ね合わせ**、`<m>:<coef>` で係数を与える (省略時 1、最大 8 モード)。入力電力は係数に依らず `feed` 電圧^2 に正規化されるため係数は分岐比のみを決める。モードが見つからない場合はガウシアンへフォールバック。省略時は `gauss` |
-| `wlsweep` | `wlsweep = <0\|1>` | 波長掃引。`frequency2` の全点を順に計算し、各波長の透過率を `spectrum.csv` (lambda_m, frequency_Hz, transmission) へ出力する。`/field` と HDF5 メタデータは**最終波長**の結果。省略時 (0) は先頭波長のみ = 従来動作。**CPU 版のみ** |
+| `wlsweep` | `wlsweep = <0\|1>` | 波長掃引。`frequency2` の全点を順に計算し、各波長の透過率を `spectrum.csv` (lambda_m, frequency_Hz, transmission) へ出力する。`/field` と HDF5 メタデータは**最終波長**の結果。省略時 (0) は先頭波長のみ = 従来動作。CUDA 版も対応 (実機未検証) |
 | `tpa` | `tpa = <material id> <beta[cm/GW]>` | 材料に二光子吸収 (TPA) 係数 beta を付与 (複数行可)。省略時は線形計算 |
 | `powersweep` | `powersweep = <Pmin[W]> <Pmax[W]> <npoints> [log\|lin]` | 入力パワー掃引 (既定 lin)。`activation_curve.csv` に P_out(P_in) を出力。省略時は従来の単発計算 |
 
@@ -345,6 +359,42 @@ ripfile = grin_rip.csv
   コサインフィットで 315.6 µm (**誤差 0.46%**)。3D HDF5 経路は、fiber.ofd の
   geometry と同じ n 値を 3D `/rip/n` で与えた場合に全出力が**ビット一致**する
   ことで検証済み
+
+### PML 吸収境界 (複素座標伸長)
+
+横方向境界に PML (Perfectly Matched Layer) を置き、領域外へ出ていく光の
+境界反射を抑えます。
+
+```
+pml = 4e-6          # 層厚 4um (この例では 16 セル)
+pml = 4e-6 1e-8     # 目標往復振幅反射率 R0 を指定 (既定 1e-20)
+```
+
+- 横方向の微分を `∂/∂x -> (1/s(x)) ∂/∂x` に置き換えます。位相規約が
+  `exp(-i k z)` なので `s(x) = 1 - i·sigma(x)` とすると、外向き波は層内で
+  `|E| ~ exp(-|kx|·∫sigma dx)` で減衰します (屈折率を変えないため、
+  垂直入射でもインピーダンス不整合による反射が生じません)
+- `sigma(d) = sigma_max·(d/W)^3` (d = 層内での深さ)。`sigma_max` は
+  「かすめ入射 (kx = k0·n0) での往復振幅反射率が R0」から決めます:
+  `sigma_max = -(m+1)·ln(R0) / (2·k0·n0·W)`, m = 3
+- 入射角 θ (kx = k0·n0·sinθ) での往復**電力**反射率は `R0^(2 sinθ)` になります
+- 指定時は従来の端部吸収体 (BPM-MATLAB 由来の振幅 multiplier) を無効化します。
+  **省略時は従来どおり**で、出力は変更前とビット一致します
+- CPU の近軸・拡張 (広角/半ベクトル) の両経路と CUDA 版に実装されています
+  (CUDA はコンパイル検証のみ、GPU 実機未検証)
+- 対称境界 (`symmetry`) を使う軸の鏡像面側には PML を置きません
+
+検証サンプル `data/sample/pml_tilt.ofd` (15° 傾けたガウシアンを側壁へ入射):
+
+| 境界処理 | 出口電力 P/P0 | 壁なし参照との差 (= 反射) |
+|---|---|---|
+| 従来の端部吸収体 | 0.982 | 入射電力の **73%** が反射 |
+| `pml = 4e-6` (近軸) | 7.67e-05 | **9.5e-08** |
+| `pml = 4e-6` (広角パス) | — | **1.6e-09** |
+
+R0 を変えたときの反射率は理論式 `R0^(2 sinθ)` に沿って下がり
+(R0 = 1e-4 で実測 9.7e-3 / 理論 8.5e-3)、R0 = 1e-20 付近で離散化由来の
+反射床 (~1e-7) に飽和します。
 
 ### テーパ / ツイスト (座標変換)
 

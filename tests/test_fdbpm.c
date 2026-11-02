@@ -14,6 +14,12 @@ test_fdbpm.c
   2. 損失なし自由空間でのエネルギー保存 : sum|E|^2 = const
   3. 一様吸収媒質での強度減衰       : P(z)/P(0) = exp(-2 k0 n'' z)
   4. ビーム中心の保持 (対称な初期界は中心を移動しない)
+  5. 曲げ (等価屈折率法) の偏向            : <x>(z) = z^2/(2 RoC)
+                                      (applyMultiplier 内の n_bend 変換を通す)
+  6. PML (複素座標伸長) の境界反射        : 壁の無い広領域の参照計算と内部窓の
+                                      残留電力を比べる。PML の吸収を
+                                      fieldCorrection (電力の再正規化) が
+                                      打ち消さないこと (電力簿記の同期) も確認する
 
 呼び出し順は sol/solve_bpm.cpp と同一 (substep1a/1b/2a/2b →
 applyMultiplier → swapEPointers → updatePrecisePower)。
@@ -237,11 +243,131 @@ static void test_uniform_absorption(void)
 	rig_free(&R);
 }
 
+/* 5. 曲げ (等価屈折率法) : 一様媒質 + n_bend = n0*exp(x/RoC) (rho_e = 0) では
+ *    ビーム重心が円弧を描く : <x>(z) = z^2/(2*RoC) (Ehrenfest の定理)。
+ *    test_wabpm の bend_deflection と同じ条件で、既定経路 (近軸カーネル) の
+ *    applyMultiplier 内の曲げ変換を検証する。許容 2% は test_wabpm と同じ
+ *    (実測 -0.75%) */
+static void test_bend_deflection(void)
+{
+	const double lambda = 1.55e-6, n = 1.444, w0 = 8e-6;
+	const int Nx = 192, Ny = 192, Nz = 400;
+	/* dx = 0.75um (w0 の約 1/10)。誤差は横方向の離散化が支配し dx^2 で縮む :
+	 *   dx = 1.5um で -2.2%、0.75um で -0.75% (dz を半分にしてもほぼ不変)。
+	 *   領域幅 (144um / 288um) は結果に影響しない (偏向 4um に対し十分広い) */
+	const double dx = 144e-6 / Nx, dz = 1e-6;
+	const double RoC = 20e-3;
+
+	struct rig R;
+	rig_init(&R, Nx, Ny, Nz, dx, dz, lambda, n, 0.0, w0);
+	R.P.RoC = (float)RoC;
+	R.P.rho_e = 0.0f;
+	R.P.cosBendDirection = 1.0f;   /* +x 方向へ曲げる */
+	R.P.sinBendDirection = 0.0f;
+	rig_run(&R);
+
+	double w, p, xbar;
+	field_stats(&R, &w, &p, &xbar);
+	const double z = dz * Nz;
+	check_close("fdbpm: bend deflection z^2/(2 RoC)", xbar, z * z / (2 * RoC), 0.02);
+	rig_free(&R);
+}
+
+/* PML の面係数 (sol/solve_bpm.cpp の bpmPmlAxis と同じ規約)
+ *   s(u) = 1 - i*sigma(u), sigma(d) = smax*(d/W)^3
+ *   gm[i] = 1/(s(cent_i) s(face_{i-1/2})), gp[i] = 1/(s(cent_i) s(face_{i+1/2})) */
+static double pml_sigma(double u, double lo, double hi, double W, double smax)
+{
+	double d = 0;
+	if (u < lo)      d = lo - u;
+	else if (u > hi) d = u - hi;
+	if (d <= 0) return 0;
+	if (d > W) d = W;
+	return smax * pow(d / W, 3.0);
+}
+
+static void pml_axis(int N, double d, double W, double smax, floatcomplex *gm, floatcomplex *gp)
+{
+	const double half = 0.5 * N * d;
+	for (int i = 0; i < N; i++) {
+		const double uc = d * (i - (N - 1) / 2.0);
+		const double sc = pml_sigma(uc,           -half + W, half - W, W, smax);
+		const double sm = pml_sigma(uc - 0.5 * d, -half + W, half - W, W, smax);
+		const double sp = pml_sigma(uc + 0.5 * d, -half + W, half - W, W, smax);
+		/* 1/((1 - i a)(1 - i b)) = 1/((1 - ab) - i(a + b)) */
+		double re = 1 - sc * sm, im = -(sc + sm), den = re * re + im * im;
+		gm[i] = (float)(re / den) + (float)(-im / den) * I;
+		re = 1 - sc * sp; im = -(sc + sp); den = re * re + im * im;
+		gp[i] = (float)(re / den) + (float)(-im / den) * I;
+	}
+}
+
+/* 15 度傾けたガウシアンを伝搬させ、内部窓 |x|,|y| < win の残留電力を返す */
+static double tilt_run(int Nx, int Ny, double pmlW, double win, double *pin)
+{
+	const double lambda = 1.55e-6, n = 1.444, w0 = 4e-6, tilt = 15.0;
+	const double dx = 0.25e-6, dz = 0.5e-6;
+	const int Nz = 400;
+	struct rig R;
+	rig_init(&R, Nx, Ny, Nz, dx, dz, lambda, n, 0.0, w0);
+	/* 傾きの位相ランプ (solve_bpm と同じ符号 : ph = -kt*x) */
+	const double kt = R.k0 * n * sin(tilt * M_PI / 180.0);
+	for (int iy = 0; iy < Ny; iy++) {
+		for (int ix = 0; ix < Nx; ix++) {
+			const long i = ix + (long)iy * Nx;
+			const double x = dx * (ix - (Nx - 1) / 2.0);
+			const float a = CREALF(R.P.E1[i]);
+			R.P.E1[i] = (float)(a * cos(-kt * x)) + (float)(a * sin(-kt * x)) * I;
+		}
+	}
+	floatcomplex *g[4] = {NULL, NULL, NULL, NULL};
+	if (pmlW > 0) {
+		const double smax = -(3.0 + 1.0) * log(1e-20) / (2 * R.k0 * n * pmlW);
+		for (int k = 0; k < 4; k++) g[k] = (floatcomplex *)malloc((size_t)((k < 2) ? Nx : Ny) * sizeof(floatcomplex));
+		pml_axis(Nx, dx, pmlW, smax, g[0], g[1]);
+		pml_axis(Ny, dx, pmlW, smax, g[2], g[3]);
+		R.P.pmlxm = g[0]; R.P.pmlxp = g[1]; R.P.pmlym = g[2]; R.P.pmlyp = g[3];
+	}
+	*pin = R.P.precisePower;
+	rig_run(&R);
+	double p = 0;
+	for (int iy = 0; iy < Ny; iy++) {
+		for (int ix = 0; ix < Nx; ix++) {
+			const double x = dx * (ix - (Nx - 1) / 2.0);
+			const double y = dx * (iy - (Ny - 1) / 2.0);
+			const floatcomplex e = R.P.Efinal[ix + (long)iy * Nx];
+			if (fabs(x) < win && fabs(y) < win) p += (double)CREALF(e) * CREALF(e) + (double)CIMAGF(e) * CIMAGF(e);
+		}
+	}
+	for (int k = 0; k < 4; k++) free(g[k]);
+	rig_free(&R);
+	return p;
+}
+
+/* 6. PML : 小領域 (Nx = 160, ±20um) の内部窓 |x|,|y| < 16um の残留電力を、
+ *    x を 4 倍に広げた参照 (壁に届かない) と比べて反射電力を測る。
+ *    solve_bpm 経由の実測は 9.5e-8 (PML) / 0.73 (従来吸収体)。判定は 1e-5 / 0.1 */
+static void test_pml_reflection(void)
+{
+	const double win = 16e-6;
+	double pin = 0, pin_ref = 0, pin_h = 0;
+	const double ref  = tilt_run(640, 160, 0.0,  win, &pin_ref);
+	const double pml  = tilt_run(160, 160, 4e-6, win, &pin);
+	const double hard = tilt_run(160, 160, 0.0,  win, &pin_h);
+	const double r_pml = fabs(pml - ref) / pin, r_hard = fabs(hard - ref) / pin_h;
+	const int ok = (r_pml < 1e-5) && (r_hard > 0.1);
+	printf("[%s] %-44s R_pml = %.3g (< 1e-5), R_dirichlet = %.3g (> 0.1)\n",
+	       ok ? " OK " : "FAIL", "fdbpm: PML reflection vs wall-free ref", r_pml, r_hard);
+	if (!ok) g_failures++;
+}
+
 int main(void)
 {
 	printf("=== FDBPMpropagator (scalar paraxial ADI) unit tests ===\n");
 	test_free_space_diffraction();
 	test_uniform_absorption();
+	test_bend_deflection();
+	test_pml_reflection();
 	printf("=== %s (%d failure(s)) ===\n",
 	       g_failures ? "FAILED" : "PASSED", g_failures);
 	return g_failures ? 1 : 0;

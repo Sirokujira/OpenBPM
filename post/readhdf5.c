@@ -116,7 +116,9 @@ void readhdf5() {
         {"VPoint", &VPoint, NPoint * (Solver.maxiter + 1)},
         {"Freq1", &Freq1, NFreq1},
         {"Freq2", &Freq2, NFreq2},
-        {"Gline", &Gline, NGline * 2 * 3}
+        // Gline は double (*)[2][3]。読み込んだ平坦な double 配列をそのまま指させる。
+        // GCC 14 以降は暗黙のポインタ型変換がエラーになるため明示的にキャストする
+        {"Gline", (double **)&Gline, NGline * 2 * 3}
     };
 
     for (int i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {

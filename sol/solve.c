@@ -570,7 +570,9 @@ void solve(int io, double *tdft, FILE *fp) {
         {"VPoint", VPoint, NPoint * (Solver.maxiter + 1)},
         {"Freq1", Freq1, NFreq1},
         {"Freq2", Freq2, NFreq2},
-        {"Gline", Gline, NGline * 2 * 3}
+        // Gline は double (*)[2][3] (連続した NGline*2*3 個の double)。GCC 14 以降は
+        // 暗黙のポインタ型変換がエラーになるため明示的にキャストする (挙動は同じ)
+        {"Gline", (double *)Gline, NGline * 2 * 3}
     };
 
     for (int i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {

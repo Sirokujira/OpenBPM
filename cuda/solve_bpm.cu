@@ -13,6 +13,8 @@ sol/solve_bpm.cpp の CUDA 版
 #define FILE_NAME "time_series_data.h5"
 // 光活性化関数曲線 (powersweep 指定時に出力)
 #define FN_activation "activation_curve.csv"
+// 波長スペクトル (wlsweep 指定時に出力。CPU 版 sol/solve_bpm.cpp と同一形式)
+#define FN_spectrum   "spectrum.csv"
 
 #include "bpm/bpm_prototype.h"
 #include "bpm/wabpm.h"
@@ -314,7 +316,50 @@ static void bpmNSlice(floatcomplex *dst, const floatcomplex *n_mat, int64_t iz)
 }
 
 
-void solve_bpm(int io, double *tdft, FILE *fp)
+// ============================================================
+// PML (複素座標伸長) の係数構築 (CPU 版 sol/solve_bpm.cpp と同一)
+//
+// 位相規約 exp(-i k z) に対し s(x) = 1 - i*sigma(x) と伸長すると、
+// 外向きの横方向波は PML 層内で |E| ~ exp(-|kx| ∫sigma dx) で減衰する。
+// sigma(d) = smax*(d/W)^m (m = 3), smax は「かすめ入射 (kx = k0*n0) の
+// 往復振幅反射率が R0」から smax = -(m+1)*ln(R0)/(2*k0*n0*W) と決める。
+// 対称境界側は物理境界ではないので PML を置かない。
+// ============================================================
+static double bpmPmlSigma(double u, double lo, double hi, double Wpml, double smax, int symLow)
+{
+	const double m = 3.0;
+	double d = 0;
+	if (!symLow && (u < lo)) d = lo - u;
+	else if (u > hi)         d = u - hi;
+	if (d <= 0) return 0;
+	if (d > Wpml) d = Wpml;
+	return smax * pow(d / Wpml, m);
+}
+
+static void bpmPmlAxis(const double *node, const double *cent, int N,
+                       double Wpml, double smax, int symLow,
+                       std::complex<double> *gm, std::complex<double> *gp)
+{
+	const double lo = node[0] + Wpml;
+	const double hi = node[N] - Wpml;
+	for (int i = 0; i < N; i++) {
+		const std::complex<double> sc(1.0, -bpmPmlSigma(cent[i],     lo, hi, Wpml, smax, symLow));
+		const std::complex<double> sm(1.0, -bpmPmlSigma(node[i],     lo, hi, Wpml, smax, symLow));
+		const std::complex<double> sp(1.0, -bpmPmlSigma(node[i + 1], lo, hi, Wpml, smax, symLow));
+		gm[i] = 1.0 / (sc * sm);
+		gp[i] = 1.0 / (sc * sp);
+	}
+}
+
+// ============================================================
+// 1 波長分の BPM 計算 (伝搬・HDF5 出力まで)。戻り値は透過率
+// T = 出口の生の |E|^2 和 / 伝搬開始時の生の |E|^2 和 (powersweep 時は最終掃引点)。
+// 波長掃引 (wlsweep) では下の solve_bpm() が波長ごとに呼ぶ。毎回デバイス/ホストの
+// 作業領域を確保・解放し、HDF5 は呼ぶたびに作り直す (= 最終波長の結果が残る。
+// CPU 版の「/field 出力は最終波長」と同じ)。
+//   iwl, nwl : 波長番号 / 波長数 (共通の警告・確保は iwl == 0 のときだけ行う)
+// ============================================================
+static double solve_bpm_one(int io, double *tdft, FILE *fp, double lambda, int iwl, int nwl)
 {
 	// HDF5ファイルの作成
 	hid_t file_id;
@@ -333,13 +378,15 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	double Dx = (Xn[Nx] - Xn[0]) / Nx;
 	double Dy = (Yn[Ny] - Yn[0]) / Ny;
 	double Dz = (Zn[Nz] - Zn[0]) / Nz;
-	sprintf(str, "cell step : %.6e %.6e %.6e", Dx, Dy, Dz);
-	if (io) fprintf(fp, "%s\n", str);
-	fprintf(stdout, "%s\n", str);
+	if (iwl == 0) {
+		sprintf(str, "cell step : %.6e %.6e %.6e", Dx, Dy, Dz);
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
 
 	// 不均一メッシュの警告 : BPM カーネルは等間隔グリッドを仮定するため、
 	// 不均一の場合は平均セル幅で計算される
-	{
+	if (iwl == 0) {
 		const char *axisname[] = {"x", "y", "z"};
 		double *node[] = {Xn, Yn, Zn};
 		const int ncell[] = {Nx, Ny, Nz};
@@ -360,15 +407,16 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		}
 	}
 
-	// 波長 : OpenFDTD の周波数データ (frequency2 優先) から決定する
-	double lambda;
-	if      (NFreq2 > 0) lambda = SPEED_OF_LIGHT / Freq2[0];
-	else if (NFreq1 > 0) lambda = SPEED_OF_LIGHT / Freq1[0];
-	else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
+	// 波長は呼び出し側 (solve_bpm) が frequency2 優先で決めて渡す
 	const double k0 = (2 * PI) / lambda;
+	if (nwl > 1) {
+		sprintf(str, "wlsweep %d / %d : lambda = %.6e [m]", iwl + 1, nwl, lambda);
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
 
 	// BPM で無効な入力キーワードの警告 (パースはされるが伝搬には反映されない)
-	{
+	if (iwl == 0) {
 	    struct { int cond; const char *name; } ignored[] = {
 	        {IPlanewave != 0,          "planewave"},
 	        {NPoint > 0,               "point (S パラメータ出力はゼロになる)"},
@@ -376,8 +424,6 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	        {rFeed != 0,               "rfeed"},
 	        {iABC == 1,                "abc = 1 (PML; BPM は独自の端部吸収体を使用)"},
 	        {PBCx || PBCy || PBCz,     "pbc"},
-	        // 波長掃引は CPU 版 (obpm) のみ実装。CUDA 版は先頭波長のみ計算する
-	        {BPM.wlsweep != 0,         "wlsweep (CUDA 版は未対応 : CPU 版 obpm を使用してください)"},
 	    };
 	    for (size_t n = 0; n < sizeof(ignored) / sizeof(ignored[0]); n++) {
 	        if (ignored[n].cond) {
@@ -396,8 +442,15 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	        if (io) fprintf(fp, "%s\n", str);
 	        fprintf(stdout, "%s\n", str);
 	    }
-	    // CUDA 版は波長掃引に未対応 (先頭周波数のみ使用)。
-	    // wlsweep 指定時は上の一覧で専用の warning を出しているため二重に出さない。
+	    // wlsweep は CUDA 版でも実装済み (solve_bpm の波長ループ) だが実機未検証
+	    if (BPM.wlsweep) {
+	        sprintf(str, "*** note : wlsweep is implemented in the CUDA solver"
+	                     " but not yet validated on real GPU hardware."
+	                     " Cross-check against the CPU solver (obpm) if accuracy matters.");
+	        if (io) fprintf(fp, "%s\n", str);
+	        fprintf(stdout, "%s\n", str);
+	    }
+	    // wlsweep 未指定で複数周波数がある場合は先頭のみ使う (CPU 版と同一)
 	    if (!BPM.wlsweep && ((NFreq2 > 1) || ((NFreq2 == 0) && (NFreq1 > 1)))) {
 	        sprintf(str, "*** warning : multiple frequencies are not swept by the BPM solver (only the first is used).");
 	        if (io) fprintf(fp, "%s\n", str);
@@ -542,6 +595,53 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	P->n_out = (floatcomplex *)malloc((P->Nx * P->Ny) * sizeof(floatcomplex)); // Output refractive index(Array)
 	P->multiplier = (float *)malloc((P->Nx * P->Ny) * sizeof(float));
 
+	// --- PML (pml = <width> [<R0>]) の係数構築 ---
+	// 未指定なら全ポインタが NULL のままで、カーネルは従来の ax/ay を使う
+	const int usePml = (BPM.pmlw > 0);
+	P->pmlxm = P->pmlxp = P->pmlym = P->pmlyp = NULL;
+	std::complex<double> *pmlgxm = NULL, *pmlgxp = NULL, *pmlgym = NULL, *pmlgyp = NULL;
+	if (usePml) {
+		const double m_grade = 3.0;
+		const double Lx_dom = Xn[Nx] - Xn[0];
+		const double Ly_dom = Yn[Ny] - Yn[0];
+		if ((2 * BPM.pmlw >= Lx_dom) || (2 * BPM.pmlw >= Ly_dom)) {
+			sprintf(str, "*** warning : pml width %.3e [m] is too large for the domain"
+			             " (%.3e x %.3e [m]).", BPM.pmlw, Lx_dom, Ly_dom);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
+		const double smax = -(m_grade + 1) * log(BPM.pmlR0) / (2 * k0 * P->n_0 * BPM.pmlw);
+		pmlgxm = new std::complex<double>[Nx];
+		pmlgxp = new std::complex<double>[Nx];
+		pmlgym = new std::complex<double>[Ny];
+		pmlgyp = new std::complex<double>[Ny];
+		bpmPmlAxis(Xn, Xc, Nx, BPM.pmlw, smax, BPM.symx, pmlgxm, pmlgxp);
+		bpmPmlAxis(Yn, Yc, Ny, BPM.pmlw, smax, BPM.symy, pmlgym, pmlgyp);
+		P->pmlxm = (floatcomplex *)malloc((size_t)Nx * sizeof(floatcomplex));
+		P->pmlxp = (floatcomplex *)malloc((size_t)Nx * sizeof(floatcomplex));
+		P->pmlym = (floatcomplex *)malloc((size_t)Ny * sizeof(floatcomplex));
+		P->pmlyp = (floatcomplex *)malloc((size_t)Ny * sizeof(floatcomplex));
+		for (int ix = 0; ix < Nx; ix++) {
+			floatcomplex vm = {(float)pmlgxm[ix].real(), (float)pmlgxm[ix].imag()};
+			floatcomplex vp = {(float)pmlgxp[ix].real(), (float)pmlgxp[ix].imag()};
+			P->pmlxm[ix] = vm;
+			P->pmlxp[ix] = vp;
+		}
+		for (int iy = 0; iy < Ny; iy++) {
+			floatcomplex vm = {(float)pmlgym[iy].real(), (float)pmlgym[iy].imag()};
+			floatcomplex vp = {(float)pmlgyp[iy].real(), (float)pmlgyp[iy].imag()};
+			P->pmlym[iy] = vm;
+			P->pmlyp[iy] = vp;
+		}
+		const int ncx = (int)(BPM.pmlw / P->dx + 0.5);
+		const int ncy = (int)(BPM.pmlw / P->dy + 0.5);
+		sprintf(str, "pml : width = %.3e [m] (%d x %d cells), R0 = %.1e,"
+		             " sigma_max = %.3f (legacy absorber disabled)",
+		        BPM.pmlw, ncx, ncy, BPM.pmlR0, smax);
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
+
 	// 初期電界 (ガウシアンビーム) と端部吸収体 (multiplier) の設定
 	// - ビームウェスト : 入力 (beam =) を優先し、未指定なら領域幅の 1/4
 	// - ビーム中心    : 入力 (beam = w0 x0 y0) > 給電点 (feed) > 領域中心
@@ -585,7 +685,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 				P->E1[i] = e;
 				power += (double)amp * amp;
 				double dist = MAX(0.0, MAX(fabs(Xc[ix] - xmid) - xEdge, fabs(Yc[iy] - ymid) - yEdge));
-				P->multiplier[i] = (float)exp(-P->dz * dist * dist * alpha);
+				// PML 使用時は振幅吸収体を掛けない (境界吸収は PML が担当する)
+				P->multiplier[i] = usePml ? 1.0f : (float)exp(-P->dz * dist * dist * alpha);
 			}
 		}
 		P->precisePower = power;
@@ -816,7 +917,8 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	}
 	// CUDA 版ではホスト側の near3d 配列は memcopy3_gpu() 内で確保されるため、
 	// BPM (FDTD 反復なし) では writeout 用にゼロ配列をここで確保する
-	if ((NN > 0) && (NFreq2 > 0)) {
+	// (波長掃引では内容がゼロのまま変わらないので最初の波長でだけ確保する)
+	if ((iwl == 0) && (NN > 0) && (NFreq2 > 0)) {
 		const size_t num = (size_t)NFreq2 * NN;
 		cEx_r = (float *)calloc(num, sizeof(float));
 		cEx_i = (float *)calloc(num, sizeof(float));
@@ -856,6 +958,7 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	const int    nsweep   = sweep ? PowerSweep.npoints : 1;
 	const int    physcale = (sweep || haveTpa);   // 物理スケーリングの有無
 	const double E0rawpow = P->precisePower;      // 初期界の生の |E|^2 和 (面積要素なし)
+	double pinRaw = 0;      // 伝搬開始時の生の |E|^2 和 (透過率算出用)
 	floatcomplex *E0 = NULL;                      // 初期界の保存 (掃引毎の再初期化用)
 	double *sweepPin = NULL, *sweepPout = NULL;
 	// TPA 係数のスライス配列 (デバイスへ転送する)
@@ -994,6 +1097,7 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		sprintf(str, "sweep %d / %d : P_in = %g [W]", isweep + 1, nsweep, Pin);
 		fprintf(stdout, "%s\n", str);
 	}
+	pinRaw = P->precisePower;   // 伝搬開始時の生の |E|^2 和 (透過率の分母, CPU 版と同一)
 
 	if (BPM.pol || BPM.wideangle) {
 		// ============================================================
@@ -1019,6 +1123,11 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 		W.pol = BPM.pol;
 		W.symx = BPM.symx;
 		W.symy = BPM.symy;
+		// PML (複素座標伸長) : 近軸パスと同じ係数を拡張パスにも渡す
+		W.gxm = pmlgxm;
+		W.gxp = pmlgxp;
+		W.gym = pmlgym;
+		W.gyp = pmlgyp;
 
 		wabpm_cplx *Ed = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
 		wabpm_cplx *n2 = (wabpm_cplx *)malloc((size_t)Nx * Ny * sizeof(wabpm_cplx));
@@ -1321,6 +1430,22 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	}
 
 	}  // 掃引ループ (isweep) 終了
+
+	// この波長の透過率 T = 出力パワー / 入力パワー (同一単位の生の |E|^2 和で算出)
+	double trans = 0;
+	{
+		double poutRaw = 0;
+		for (long i = 0; i < (long)P->Nx * P->Ny; i++) {
+			const floatcomplex e = P->Efinal[i];
+			poutRaw += ((double)CREALF(e) * CREALF(e)) + ((double)CIMAGF(e) * CIMAGF(e));
+		}
+		trans = (pinRaw > 0) ? (poutRaw / pinRaw) : 0;
+		if (nwl > 1) {
+			sprintf(str, "wlsweep : lambda = %.6e [m] -> T = %.6f", lambda, trans);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
+	}
 
 	// 光活性化関数曲線 P_out(P_in) の CSV 出力
 	if (sweep) {
@@ -1712,16 +1837,17 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 
 	status = H5Fclose(file_id);
 
-	// free (FDTD 用デバイスメモリ)
-	memfree2_gpu();
-	memfree3_gpu();
-
 	// ホスト側バッファの解放 (E2/Eyx/b はデバイス側のみで retrieveAndFreeDeviceStructs が解放済み)
 	free(P->E1);
 	free(P->Efinal);
 	free(P->n_out);
 	free(P->n_in);
 	free(P->multiplier);
+	if (P->pmlxm != NULL) free(P->pmlxm);
+	if (P->pmlxp != NULL) free(P->pmlxp);
+	if (P->pmlym != NULL) free(P->pmlym);
+	if (P->pmlyp != NULL) free(P->pmlyp);
+	if (pmlgxm != NULL) { delete[] pmlgxm; delete[] pmlgxp; delete[] pmlgym; delete[] pmlgyp; }
 	free(n_mat);
 	free(bpmNIn);
 	free(bpmNZ);
@@ -1748,4 +1874,58 @@ void solve_bpm(int io, double *tdft, FILE *fp)
 	if (sweepPout != NULL) free(sweepPout);
 	if (modeFields) delete[] modeFields;
 	if (modeNeff) delete[] modeNeff;
+
+	return trans;
+}
+
+// ============================================================
+// BPM ソルバー (CUDA) : 波長掃引ループ (CPU 版 sol/solve_bpm.cpp と同一仕様)
+//   wlsweep = 1 指定時のみ frequency2 (無ければ frequency1) の全点を順に計算し、
+//   波長ごとの透過率を spectrum.csv に出力する。未指定時は先頭周波数の 1 回のみ。
+// ============================================================
+void solve_bpm(int io, double *tdft, FILE *fp)
+{
+	char str[BUFSIZ];
+
+	const int nwl = (BPM.wlsweep && (NFreq2 > 0)) ? NFreq2
+	              : ((BPM.wlsweep && (NFreq1 > 0)) ? NFreq1 : 1);
+	double *wlLambda = (double *)malloc(nwl * sizeof(double));
+	double *wlTrans  = (double *)malloc(nwl * sizeof(double));
+	if (nwl > 1) {
+		sprintf(str, "wlsweep : %d wavelengths", nwl);
+		if (io) fprintf(fp, "%s\n", str);
+		fprintf(stdout, "%s\n", str);
+	}
+
+	for (int iwl = 0; iwl < nwl; iwl++) {
+		// 波長 : OpenFDTD の周波数データ (frequency2 優先) から決定する
+		double lambda;
+		if      (NFreq2 > 0) lambda = SPEED_OF_LIGHT / Freq2[iwl];
+		else if (NFreq1 > 0) lambda = SPEED_OF_LIGHT / Freq1[iwl];
+		else                 lambda = 1.55e-6;  // 周波数未指定時の既定値
+		wlLambda[iwl] = lambda;
+		wlTrans[iwl] = solve_bpm_one(io, tdft, fp, lambda, iwl, nwl);
+	}
+
+	// 波長スペクトル (透過率) の CSV 出力
+	if (nwl > 1) {
+		FILE *fspec = fopen(FN_spectrum, "w");
+		if (fspec != NULL) {
+			fprintf(fspec, "lambda_m,frequency_Hz,transmission\n");
+			for (int n = 0; n < nwl; n++) {
+				fprintf(fspec, "%.6e,%.6e,%.6e\n", wlLambda[n],
+				        SPEED_OF_LIGHT / wlLambda[n], wlTrans[n]);
+			}
+			fclose(fspec);
+			sprintf(str, "wlsweep : spectrum -> %s (%d points)", FN_spectrum, nwl);
+			if (io) fprintf(fp, "%s\n", str);
+			fprintf(stdout, "%s\n", str);
+		}
+	}
+	free(wlLambda);
+	free(wlTrans);
+
+	// free (FDTD 用デバイスメモリ)
+	memfree2_gpu();
+	memfree3_gpu();
 }

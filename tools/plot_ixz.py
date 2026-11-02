@@ -242,7 +242,8 @@ def main():
             if frames_z is not None:
                 return frames_z[i] * 1e6, unit
             if dz and frame_interval:
-                return i * frame_interval * dz * 1e6, unit
+                # フレームは各ステップの伝搬「後」に記録される (frames_z と同じ定義)
+                return (i * frame_interval + 1) * dz * 1e6, unit
             return i, "frame"
 
         def update(i):
@@ -281,7 +282,7 @@ def main():
             if frames_z is not None:
                 z, zu = frames_z[i] * 1e6, unit
             elif dz and frame_interval:
-                z, zu = i * frame_interval * dz * 1e6, unit
+                z, zu = (i * frame_interval + 1) * dz * 1e6, unit
             else:
                 z, zu = i, "frame"
             ax.set_title(f"arg(E(x, y))  z = {z:.1f} {zu}")

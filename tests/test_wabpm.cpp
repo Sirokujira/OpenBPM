@@ -193,8 +193,11 @@ static void test_bend_deflection()
     const double n0 = 1.444;
     const double k0 = 2.0 * M_PI / lambda;
     const double w0 = 8.0e-6;
-    const double dx = 288.0e-6 / Nx;    // x は偏向方向なので広め
-    const double dy = 96.0e-6 / Ny;
+    // 誤差は横方向の離散化が支配する (dx^2 で縮む)。以前の dx = dy = 1.5um
+    // (w0 の約 1/5) では -1.99% と許容 2% ぎりぎりだったため 0.75um にした。
+    // 領域幅は偏向 (4um) とビーム拡がり (z = 400um で w ~ 19um) に対し十分広い
+    const double dx = 144.0e-6 / Nx;
+    const double dy = 48.0e-6 / Ny;
     const double dz = 1.0e-6;
     const double RoC = 20.0e-3;
     const int nstep = 400;

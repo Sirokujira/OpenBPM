@@ -93,6 +93,13 @@ struct parameters {
   float *multiplier;
   floatcomplex ax;
   floatcomplex ay;
+  // PML (複素座標伸長) : 横方向ラプラシアンの面ごとの係数倍率。
+  // NULL なら PML 無効 (従来どおり ax/ay をそのまま使う = ビット一致)。
+  //   pmlxm[ix] = 1/(s(Xc[ix])*s(Xn[ix])), pmlxp[ix] = 1/(s(Xc[ix])*s(Xn[ix+1]))
+  floatcomplex *pmlxm;
+  floatcomplex *pmlxp;
+  floatcomplex *pmlym;
+  floatcomplex *pmlyp;
   float rho_e;
   float RoC;
   float sinBendDirection;
